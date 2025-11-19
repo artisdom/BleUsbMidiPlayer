@@ -3,7 +3,7 @@ package com.example.bleusbmidiplayer.midi
 import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
-import android.media.midi.MidiOutputPort
+import android.media.midi.MidiInputPort
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,19 +46,19 @@ class MidiDeviceController(
                 onResult(Result.failure(IllegalStateException("Unable to open device")))
                 return@openDevice
             }
-            val ports = device.info.outputPortCount
+            val ports = device.info.inputPortCount
             if (ports <= 0) {
                 device.close()
-                onResult(Result.failure(IllegalStateException("Selected device has no output ports")))
+                onResult(Result.failure(IllegalStateException("Selected device has no input ports")))
                 return@openDevice
             }
-            val outputPort = device.openOutputPort(0)
-            if (outputPort == null) {
+            val inputPort = device.openInputPort(0)
+            if (inputPort == null) {
                 device.close()
-                onResult(Result.failure(IllegalStateException("Cannot open output port")))
+                onResult(Result.failure(IllegalStateException("Cannot open input port")))
                 return@openDevice
             }
-            val session = MidiDeviceSession(deviceInfo, device, outputPort)
+            val session = MidiDeviceSession(deviceInfo, device, inputPort)
             closeActiveSession()
             _session.value = session
             onResult(Result.success(session))
@@ -92,5 +92,5 @@ class MidiDeviceController(
 data class MidiDeviceSession(
     val info: MidiDeviceInfo,
     val device: MidiDevice,
-    val outputPort: MidiOutputPort,
+    val outputPort: MidiInputPort,
 )

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -96,6 +97,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -470,8 +472,8 @@ private fun MidiDeviceInfo.connectionLabel(): String {
         MidiDeviceInfo.TYPE_VIRTUAL -> "Virtual"
         else -> "External"
     }
-    val ports = outputPortCount
-    return "$typeLabel • $ports output port${if (ports == 1) "" else "s"}"
+    val ports = inputPortCount
+    return "$typeLabel • $ports input port${if (ports == 1) "" else "s"}"
 }
 
 private fun formatTime(ms: Long): String {
