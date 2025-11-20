@@ -62,6 +62,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -72,11 +74,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.bleusbmidiplayer.BlePeripheralItem
 import com.example.bleusbmidiplayer.BleScanUiState
-import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.bleusbmidiplayer.PlaybackQueueState
 import com.example.bleusbmidiplayer.QueueMode
 import com.example.bleusbmidiplayer.midi.FolderNodeState
@@ -139,6 +141,17 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val favoriteIds = remember(uiState.favorites) { uiState.favorites.map { it.id }.toSet() }
+    val tabs = remember {
+        listOf(
+            TabItem(MainTab.DEVICES, "Devices", Icons.Default.Bluetooth),
+            TabItem(MainTab.PLAYBACK, "Playback", Icons.Default.PlayArrow),
+            TabItem(MainTab.FAVORITES, "Favorites", Icons.Default.Favorite),
+            TabItem(MainTab.PLAYLISTS, "Playlists", Icons.Default.QueueMusic),
+            TabItem(MainTab.BUNDLED, "Bundled", Icons.Default.LibraryMusic),
+            TabItem(MainTab.USER_FOLDER, "User folder", Icons.Default.Folder)
+        )
+    }
+    var selectedTabIndex by remember { mutableStateOf(0) }
     var playlistDialogTarget by remember { mutableStateOf<PlaylistTarget?>(null) }
     var managePlaylist by remember { mutableStateOf<MidiPlaylist?>(null) }
     val folderLauncher = rememberLauncherForActivityResult(
@@ -181,89 +194,161 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
             }
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .padding(innerPadding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(16.dp)
+                .fillMaxSize()
         ) {
-            item {
-                DeviceSection(
-                    devices = uiState.devices,
-                    session = uiState.activeSession,
-                    onConnect = viewModel::connect,
-                    onDisconnect = viewModel::disconnectDevice
-                )
+            TabRow(selectedTabIndex = selectedTabIndex) {
+                tabs.forEachIndexed { index, tab ->
+                    Tab(
+                        selected = index == selectedTabIndex,
+                        onClick = { selectedTabIndex = index },
+                        text = { Text(tab.label) },
+                        icon = { Icon(tab.icon, contentDescription = tab.label) }
+                    )
+                }
             }
-            item {
-                BleScanSection(
-                    scanState = uiState.bleScan,
-                    onStartScan = viewModel::startBleScan,
-                    onStopScan = viewModel::stopBleScan,
-                    onConnect = viewModel::connectBlePeripheral
-                )
-            }
-            item {
-                PlaybackSection(
-                    playbackState = uiState.playbackState,
-                    queueState = uiState.queue,
-                    onStop = viewModel::stopPlayback,
-                    onNext = viewModel::playNextInQueue,
-                    onPrevious = viewModel::playPreviousInQueue
-                )
-            }
-            item {
-                LibrarySection(
-                    title = "Bundled songs",
-                    subtitle = "MIDI files stored in assets/midi",
-                    files = uiState.library.bundled,
-                    currentFileId = uiState.playbackState.currentFileId(),
-                    favoriteIds = favoriteIds,
-                    onPlay = viewModel::play,
-                    onStop = viewModel::stopPlayback,
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onAddToPlaylist = { playlistDialogTarget = PlaylistTarget.Track(it) }
-                )
-            }
-            item {
-                FavoritesSection(
-                    favorites = uiState.favorites,
-                    currentFileId = uiState.playbackState.currentFileId(),
-                    onPlayAll = { viewModel.playFavorites(shuffle = false) },
-                    onShuffle = { viewModel.playFavorites(shuffle = true) },
-                    onPlay = viewModel::playFavoriteAt,
-                    onRemove = viewModel::removeFavorite
-                )
-            }
-            item {
-                PlaylistsSection(
-                    playlists = uiState.playlists,
-                    queueState = uiState.queue,
-                    onCreate = viewModel::createPlaylist,
-                    onPlay = { id -> viewModel.playPlaylist(id, shuffle = false) },
-                    onShufflePlay = { id -> viewModel.playPlaylist(id, shuffle = true) },
-                    onDelete = viewModel::deletePlaylist,
-                    onRename = viewModel::renamePlaylist,
-                    onManage = { managePlaylist = it },
-                    onGenerateRandom = viewModel::generateRandomPlaylist
-                )
-            }
-            item {
-                UserFolderSection(
-                    libraryState = uiState.library,
-                    currentFileId = uiState.playbackState.currentFileId(),
-                    onPickFolder = { folderLauncher.launch(uiState.library.folderTree.selectedFolder) },
-                    onToggleFolder = viewModel::toggleFolder,
-                    onPlay = viewModel::play,
-                    onStop = viewModel::stopPlayback,
-                    favoriteIds = favoriteIds,
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onAddToPlaylist = { playlistDialogTarget = PlaylistTarget.Track(it) },
-                    onFavoriteFolder = viewModel::addFolderToFavorites,
-                    onAddFolderToPlaylist = { folder ->
-                        playlistDialogTarget = PlaylistTarget.Folder(folder.uri, folder.name)
+            Spacer(Modifier.height(12.dp))
+            when (tabs[selectedTabIndex].type) {
+                MainTab.DEVICES -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            DeviceSection(
+                                devices = uiState.devices,
+                                session = uiState.activeSession,
+                                onConnect = viewModel::connect,
+                                onDisconnect = viewModel::disconnectDevice
+                            )
+                        }
+                        item {
+                            BleScanSection(
+                                scanState = uiState.bleScan,
+                                onStartScan = viewModel::startBleScan,
+                                onStopScan = viewModel::stopBleScan,
+                                onConnect = viewModel::connectBlePeripheral
+                            )
+                        }
                     }
-                )
+                }
+
+                MainTab.PLAYBACK -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            PlaybackSection(
+                                playbackState = uiState.playbackState,
+                                queueState = uiState.queue,
+                                onStop = viewModel::stopPlayback,
+                                onNext = viewModel::playNextInQueue,
+                                onPrevious = viewModel::playPreviousInQueue
+                            )
+                        }
+                    }
+                }
+
+                MainTab.FAVORITES -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            FavoritesSection(
+                                favorites = uiState.favorites,
+                                currentFileId = uiState.playbackState.currentFileId(),
+                                onPlayAll = { viewModel.playFavorites(shuffle = false) },
+                                onShuffle = { viewModel.playFavorites(shuffle = true) },
+                                onPlay = viewModel::playFavoriteAt,
+                                onRemove = viewModel::removeFavorite
+                            )
+                        }
+                    }
+                }
+
+                MainTab.PLAYLISTS -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            PlaylistsSection(
+                                playlists = uiState.playlists,
+                                queueState = uiState.queue,
+                                onCreate = viewModel::createPlaylist,
+                                onPlay = { id -> viewModel.playPlaylist(id, shuffle = false) },
+                                onShufflePlay = { id -> viewModel.playPlaylist(id, shuffle = true) },
+                                onDelete = viewModel::deletePlaylist,
+                                onRename = viewModel::renamePlaylist,
+                                onManage = { managePlaylist = it },
+                                onGenerateRandom = viewModel::generateRandomPlaylist
+                            )
+                        }
+                    }
+                }
+
+                MainTab.BUNDLED -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            LibrarySection(
+                                title = "Bundled songs",
+                                subtitle = "MIDI files stored in assets/midi",
+                                files = uiState.library.bundled,
+                                currentFileId = uiState.playbackState.currentFileId(),
+                                favoriteIds = favoriteIds,
+                                onPlay = viewModel::play,
+                                onStop = viewModel::stopPlayback,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                onAddToPlaylist = { playlistDialogTarget = PlaylistTarget.Track(it) }
+                            )
+                        }
+                    }
+                }
+
+                MainTab.USER_FOLDER -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            UserFolderSection(
+                                libraryState = uiState.library,
+                                currentFileId = uiState.playbackState.currentFileId(),
+                                onPickFolder = { folderLauncher.launch(uiState.library.folderTree.selectedFolder) },
+                                onToggleFolder = viewModel::toggleFolder,
+                                onPlay = viewModel::play,
+                                onStop = viewModel::stopPlayback,
+                                favoriteIds = favoriteIds,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                onAddToPlaylist = { playlistDialogTarget = PlaylistTarget.Track(it) },
+                                onFavoriteFolder = viewModel::addFolderToFavorites,
+                                onAddFolderToPlaylist = { folder ->
+                                    playlistDialogTarget = PlaylistTarget.Folder(folder.uri, folder.name)
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -572,7 +657,7 @@ private fun LibrarySection(
     onAddToPlaylist: (MidiFileItem) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ElevatedCard(onClick = { expanded = !expanded }) {
+    ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
             SectionHeader(
                 title = title,
@@ -708,7 +793,7 @@ private fun FavoritesSection(
     onRemove: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ElevatedCard(onClick = { expanded = !expanded }) {
+    ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
             SectionHeader(
                 title = "Favorites",
@@ -1251,6 +1336,21 @@ private fun TrackReference.displaySubtitle(): String {
         is TrackReferenceSource.Asset -> "Asset • ${src.assetPath.substringAfterLast('/')}"
         is TrackReferenceSource.Document -> Uri.parse(src.uri).lastPathSegment ?: "User file"
     }
+}
+
+private data class TabItem(
+    val type: MainTab,
+    val label: String,
+    val icon: ImageVector,
+)
+
+private enum class MainTab {
+    DEVICES,
+    PLAYBACK,
+    FAVORITES,
+    PLAYLISTS,
+    BUNDLED,
+    USER_FOLDER,
 }
 
 private fun Bundle.getBluetoothDevice(): BluetoothDevice? {
