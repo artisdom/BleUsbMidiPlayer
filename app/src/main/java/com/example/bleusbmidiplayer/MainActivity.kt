@@ -76,6 +76,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.bleusbmidiplayer.BlePeripheralItem
 import com.example.bleusbmidiplayer.BleScanUiState
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.bleusbmidiplayer.PlaybackQueueState
 import com.example.bleusbmidiplayer.QueueMode
 import com.example.bleusbmidiplayer.midi.FolderNodeState
@@ -570,32 +571,34 @@ private fun LibrarySection(
     onToggleFavorite: (MidiFileItem) -> Unit,
     onAddToPlaylist: (MidiFileItem) -> Unit,
 ) {
-    ElevatedCard {
+    var expanded by remember { mutableStateOf(false) }
+    ElevatedCard(onClick = { expanded = !expanded }) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LibraryMusic, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text(title, fontWeight = FontWeight.SemiBold)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            if (files.isEmpty()) {
-                Text("No MIDI files available.")
-            } else {
-                files.forEachIndexed { index, item ->
-                    MidiRow(
-                        midi = item,
-                        isActive = currentFileId == item.id,
-                        onPlay = { onPlay(item) },
-                        onStop = onStop,
-                        isFavorite = favoriteIds.contains(item.id),
-                        onToggleFavorite = { onToggleFavorite(item) },
-                        onAddToPlaylist = { onAddToPlaylist(item) }
-                    )
-                    if (index != files.lastIndex) {
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+            SectionHeader(
+                title = title,
+                subtitle = subtitle,
+                isExpanded = expanded,
+                onToggle = { expanded = !expanded },
+                icon = Icons.Default.LibraryMusic
+            )
+            if (expanded) {
+                Spacer(Modifier.height(16.dp))
+                if (files.isEmpty()) {
+                    Text("No MIDI files available.")
+                } else {
+                    files.forEachIndexed { index, item ->
+                        MidiRow(
+                            midi = item,
+                            isActive = currentFileId == item.id,
+                            onPlay = { onPlay(item) },
+                            onStop = onStop,
+                            isFavorite = favoriteIds.contains(item.id),
+                            onToggleFavorite = { onToggleFavorite(item) },
+                            onAddToPlaylist = { onAddToPlaylist(item) }
+                        )
+                        if (index != files.lastIndex) {
+                            Divider(modifier = Modifier.padding(vertical = 8.dp))
+                        }
                     }
                 }
             }
@@ -704,44 +707,76 @@ private fun FavoritesSection(
     onPlay: (Int) -> Unit,
     onRemove: (String) -> Unit,
 ) {
-    ElevatedCard {
+    var expanded by remember { mutableStateOf(false) }
+    ElevatedCard(onClick = { expanded = !expanded }) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Favorite, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Favorites", fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.height(8.dp))
-            if (favorites.isEmpty()) {
-                Text("Add some songs to your favorite list to access them quickly.")
-            } else {
-                Row {
-                    Button(onClick = onPlayAll) {
-                        Icon(Icons.Default.QueueMusic, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Play all")
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    TextButton(onClick = onShuffle) {
-                        Icon(Icons.Default.Shuffle, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Shuffle")
-                    }
-                }
+            SectionHeader(
+                title = "Favorites",
+                subtitle = "${favorites.size} tracks",
+                isExpanded = expanded,
+                onToggle = { expanded = !expanded },
+                icon = Icons.Default.Favorite
+            )
+            if (expanded) {
                 Spacer(Modifier.height(8.dp))
-                favorites.forEachIndexed { index, track ->
-                    FavoriteRow(
-                        reference = track,
-                        isActive = currentFileId == track.id,
-                        onPlay = { onPlay(index) },
-                        onRemove = { onRemove(track.id) }
-                    )
-                    if (index != favorites.lastIndex) {
-                        Divider(modifier = Modifier.padding(vertical = 6.dp))
+                if (favorites.isEmpty()) {
+                    Text("Add some songs to your favorite list to access them quickly.")
+                } else {
+                    Row {
+                        Button(onClick = onPlayAll) {
+                            Icon(Icons.Default.QueueMusic, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Play all")
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        TextButton(onClick = onShuffle) {
+                            Icon(Icons.Default.Shuffle, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Shuffle")
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    favorites.forEachIndexed { index, track ->
+                        FavoriteRow(
+                            reference = track,
+                            isActive = currentFileId == track.id,
+                            onPlay = { onPlay(index) },
+                            onRemove = { onRemove(track.id) }
+                        )
+                        if (index != favorites.lastIndex) {
+                            Divider(modifier = Modifier.padding(vertical = 6.dp))
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    subtitle: String,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    icon: ImageVector,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle() },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+        }
+        Icon(
+            imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+            contentDescription = null
+        )
     }
 }
 
