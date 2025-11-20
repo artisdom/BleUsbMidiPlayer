@@ -64,6 +64,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.bleusbmidiplayer.BlePeripheralItem
+import com.example.bleusbmidiplayer.BleScanUiState
 import com.example.bleusbmidiplayer.midi.FolderTreeRow
 import com.example.bleusbmidiplayer.midi.MidiDeviceSession
 import com.example.bleusbmidiplayer.midi.MidiFileItem
@@ -165,6 +167,14 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                 )
             }
             item {
+                BleScanSection(
+                    scanState = uiState.bleScan,
+                    onStartScan = viewModel::startBleScan,
+                    onStopScan = viewModel::stopBleScan,
+                    onConnect = viewModel::connectBlePeripheral
+                )
+            }
+            item {
                 PlaybackSection(
                     playbackState = uiState.playbackState,
                     onStop = viewModel::stopPlayback
@@ -243,6 +253,101 @@ private fun DeviceSection(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun BleScanSection(
+    scanState: BleScanUiState,
+    onStartScan: () -> Unit,
+    onStopScan: () -> Unit,
+    onConnect: (String) -> Unit,
+) {
+    ElevatedCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Bluetooth, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("BLE MIDI discovery", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Scan nearby Bluetooth LE instruments that expose the MIDI service.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = if (scanState.isScanning) onStopScan else onStartScan) {
+                    Text(if (scanState.isScanning) "Stop scan" else "Start BLE scan")
+                }
+                if (scanState.isScanning) {
+                    Spacer(Modifier.width(12.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                }
+            }
+            scanState.error?.let { error ->
+                Spacer(Modifier.height(8.dp))
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(12.dp))
+            if (scanState.peripherals.isEmpty()) {
+                Text(
+                    if (scanState.isScanning) "Scanning..." else "No BLE peripherals found yet.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else {
+                scanState.peripherals.forEach { item ->
+                    BlePeripheralRow(
+                        item = item,
+                        onConnect = onConnect
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlePeripheralRow(
+    item: BlePeripheralItem,
+    onConnect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Bluetooth, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.name.ifBlank { "Unnamed" },
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${item.address} • RSSI ${item.rssi} dBm",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (item.hasMidiService) {
+                Text(
+                    text = "BLE MIDI service detected",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(
+                    text = "Name suggests MIDI support",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+        Button(onClick = { onConnect(item.address) }) {
+            Text("Connect")
         }
     }
 }

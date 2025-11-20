@@ -1,5 +1,6 @@
 package com.example.bleusbmidiplayer.midi
 
+import android.bluetooth.BluetoothDevice
 import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
@@ -59,6 +60,35 @@ class MidiDeviceController(
                 return@openDevice
             }
             val session = MidiDeviceSession(deviceInfo, device, inputPort)
+            closeActiveSession()
+            _session.value = session
+            onResult(Result.success(session))
+        }, handler)
+    }
+
+    fun connectBluetoothDevice(device: BluetoothDevice, onResult: (Result<MidiDeviceSession>) -> Unit) {
+        midiManager.openBluetoothDevice(device, { midiDevice ->
+            if (midiDevice == null) {
+                onResult(Result.failure(IllegalStateException("Unable to open BLE device")))
+                return@openBluetoothDevice
+            }
+            val ports = midiDevice.info.inputPortCount
+            if (ports <= 0) {
+                midiDevice.close()
+                onResult(Result.failure(IllegalStateException("BLE device has no input ports")))
+                return@openBluetoothDevice
+            }
+            val inputPort = midiDevice.openInputPort(0)
+            if (inputPort == null) {
+                midiDevice.close()
+                onResult(Result.failure(IllegalStateException("Cannot open BLE input port")))
+                return@openBluetoothDevice
+            }
+            val session = MidiDeviceSession(
+                info = midiDevice.info,
+                device = midiDevice,
+                outputPort = inputPort
+            )
             closeActiveSession()
             _session.value = session
             onResult(Result.success(session))
