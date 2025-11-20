@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
@@ -648,6 +649,37 @@ private fun PlaybackSection(
                     )
                 }
 
+                is PlaybackEngineState.Paused -> {
+                    Text("Paused: ${playbackState.file.title}", fontWeight = FontWeight.Bold)
+                    Text(playbackState.file.subtitle, style = MaterialTheme.typography.bodySmall)
+                    FavoriteToggleButton(
+                        isFavorite = favoriteIds.contains(playbackState.file.id),
+                        onToggle = { onToggleFavorite(playbackState.file) }
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("Queue: ${queueState.describe()}", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = (playbackState.positionMs.toFloat() / playbackState.durationMs.coerceAtLeast(1).toFloat())
+                            .coerceIn(0f, 1f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "${formatTime(playbackState.positionMs)} / ${formatTime(playbackState.durationMs)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    PlaybackControls(
+                        isPlaying = false,
+                        onPrevious = onPrevious,
+                        onPause = onPause,
+                        onResume = onResume,
+                        onStop = onStop,
+                        onNext = onNext,
+                        showResume = true
+                    )
+                }
+
                 is PlaybackEngineState.Completed -> {
                     Text("Finished playing ${playbackState.file.title}")
                     Spacer(Modifier.height(8.dp))
@@ -697,13 +729,11 @@ private fun PlaybackControls(
         IconButton(onClick = onPrevious) {
             Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
         }
-        IconButton(onClick = if (isPlaying) onPause else onResume) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Resume"
-            )
-        }
-        if (showResume) {
+        if (isPlaying) {
+            IconButton(onClick = onPause) {
+                Icon(Icons.Default.Pause, contentDescription = "Pause")
+            }
+        } else if (showResume) {
             IconButton(onClick = onResume) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "Resume")
             }
@@ -1237,6 +1267,7 @@ private fun MidiDeviceSession.displayLabel(): String = label ?: info.displayName
 
 private fun PlaybackEngineState.currentFileId(): String? = when (this) {
     is PlaybackEngineState.Playing -> file.id
+    is PlaybackEngineState.Paused -> file.id
     is PlaybackEngineState.Completed -> file.id
     is PlaybackEngineState.Error -> file.id
     PlaybackEngineState.Idle -> null
