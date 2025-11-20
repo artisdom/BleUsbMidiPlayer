@@ -272,8 +272,12 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                                 playbackState = uiState.playbackState,
                                 queueState = uiState.queue,
                                 onStop = viewModel::stopPlayback,
+                                onPause = viewModel::pausePlayback,
+                                onResume = viewModel::resumePlayback,
                                 onNext = viewModel::playNextInQueue,
-                                onPrevious = viewModel::playPreviousInQueue
+                                onPrevious = viewModel::playPreviousInQueue,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                favoriteIds = favoriteIds
                             )
                         }
                     }
@@ -593,8 +597,12 @@ private fun PlaybackSection(
     playbackState: PlaybackEngineState,
     queueState: PlaybackQueueState,
     onStop: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onToggleFavorite: (MidiFileItem) -> Unit,
+    favoriteIds: Set<String>,
 ) {
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -612,6 +620,10 @@ private fun PlaybackSection(
                 is PlaybackEngineState.Playing -> {
                     Text(playbackState.file.title, fontWeight = FontWeight.Bold)
                     Text(playbackState.file.subtitle, style = MaterialTheme.typography.bodySmall)
+                    FavoriteToggleButton(
+                        isFavorite = favoriteIds.contains(playbackState.file.id),
+                        onToggle = { onToggleFavorite(playbackState.file) }
+                    )
                     Spacer(Modifier.height(4.dp))
                     Text("Queue: ${queueState.describe()}", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
@@ -625,13 +637,29 @@ private fun PlaybackSection(
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(Modifier.height(12.dp))
-                    PlaybackControls(onPrevious = onPrevious, onStop = onStop, onNext = onNext)
+                    PlaybackControls(
+                        isPlaying = true,
+                        onPrevious = onPrevious,
+                        onPause = onPause,
+                        onResume = onResume,
+                        onStop = onStop,
+                        onNext = onNext,
+                        showResume = false
+                    )
                 }
 
                 is PlaybackEngineState.Completed -> {
                     Text("Finished playing ${playbackState.file.title}")
                     Spacer(Modifier.height(8.dp))
-                    PlaybackControls(onPrevious = onPrevious, onStop = onStop, onNext = onNext)
+                    PlaybackControls(
+                        isPlaying = false,
+                        onPrevious = onPrevious,
+                        onPause = onPause,
+                        onResume = onResume,
+                        onStop = onStop,
+                        onNext = onNext,
+                        showResume = true
+                    )
                 }
 
                 is PlaybackEngineState.Error -> {
@@ -640,7 +668,15 @@ private fun PlaybackSection(
                         color = MaterialTheme.colorScheme.error
                     )
                     Spacer(Modifier.height(8.dp))
-                    PlaybackControls(onPrevious = onPrevious, onStop = onStop, onNext = onNext)
+                    PlaybackControls(
+                        isPlaying = false,
+                        onPrevious = onPrevious,
+                        onPause = onPause,
+                        onResume = onResume,
+                        onStop = onStop,
+                        onNext = onNext,
+                        showResume = true
+                    )
                 }
             }
         }
@@ -649,13 +685,28 @@ private fun PlaybackSection(
 
 @Composable
 private fun PlaybackControls(
+    isPlaying: Boolean,
     onPrevious: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
     onStop: () -> Unit,
     onNext: () -> Unit,
+    showResume: Boolean,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onPrevious) {
             Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
+        }
+        IconButton(onClick = if (isPlaying) onPause else onResume) {
+            Icon(
+                imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Pause" else "Resume"
+            )
+        }
+        if (showResume) {
+            IconButton(onClick = onResume) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Resume")
+            }
         }
         IconButton(onClick = onStop) {
             Icon(Icons.Default.Stop, contentDescription = "Stop")
@@ -663,6 +714,16 @@ private fun PlaybackControls(
         IconButton(onClick = onNext) {
             Icon(Icons.Default.SkipNext, contentDescription = "Next")
         }
+    }
+}
+
+@Composable
+private fun FavoriteToggleButton(isFavorite: Boolean, onToggle: () -> Unit) {
+    IconButton(onClick = onToggle) {
+        Icon(
+            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            contentDescription = "Toggle favorite"
+        )
     }
 }
 

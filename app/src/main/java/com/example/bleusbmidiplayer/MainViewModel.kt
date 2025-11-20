@@ -402,6 +402,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateQueue { PlaybackQueueState() }
     }
 
+    fun pausePlayback() {
+        playbackEngine.pause()
+    }
+
+    fun resumePlayback() {
+        val session = _uiState.value.activeSession ?: run {
+            _uiState.update { it.copy(message = "Connect a MIDI device first") }
+            return
+        }
+        playbackEngine.resume(session.outputPort)
+    }
+
     fun playNextInQueue() {
         playNextInQueueInternal(userAction = true)
     }
