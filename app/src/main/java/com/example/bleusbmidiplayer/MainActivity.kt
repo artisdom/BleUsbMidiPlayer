@@ -89,12 +89,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun ensureBluetoothPermissions() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val missing = REQUIRED_BLUETOOTH_PERMISSIONS.filter {
-            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            needed += REQUIRED_BLUETOOTH_PERMISSIONS.filter {
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            needed += PRE_S_LOCATION_PERMISSIONS.filter {
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+            }
         }
-        if (missing.isNotEmpty()) {
-            bluetoothPermissionLauncher.launch(missing.toTypedArray())
+        if (needed.isNotEmpty()) {
+            bluetoothPermissionLauncher.launch(needed.toTypedArray())
         }
     }
 
@@ -102,6 +108,9 @@ class MainActivity : ComponentActivity() {
         private val REQUIRED_BLUETOOTH_PERMISSIONS = arrayOf(
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_SCAN,
+        )
+        private val PRE_S_LOCATION_PERMISSIONS = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
         )
     }
 }
