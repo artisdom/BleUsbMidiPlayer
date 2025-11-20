@@ -10,6 +10,7 @@ import android.bluetooth.le.ScanSettings
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.bleusbmidiplayer.data.MidiSettingsStore
@@ -264,6 +265,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleScanResult(result: ScanResult) {
+        // Add debug log to print out each found device details
+        Log.d("MainViewModel", "Found device: ${result.device?.name} - ${result.device?.address}")
+
         val device = result.device ?: return
         val name = device.name ?: result.scanRecord?.deviceName ?: "Unnamed"
         val hasMidiWord = name.contains("midi", ignoreCase = true)
@@ -363,4 +367,4 @@ data class BlePeripheralItem(
 )
 
 private val MIDI_SERVICE_UUID: UUID = UUID.fromString("03B80E5A-EDE8-4B33-A751-6CE34EC4C700")
-private const val SCAN_TIMEOUT_MS = 15_000L
+private const val SCAN_TIMEOUT_MS = 150_000L
