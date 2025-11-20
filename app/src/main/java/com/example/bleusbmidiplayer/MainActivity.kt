@@ -1,6 +1,7 @@
 package com.example.bleusbmidiplayer
 
 import android.Manifest
+import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.midi.MidiDeviceInfo
@@ -720,8 +721,14 @@ private fun MidiDeviceInfo.displayName(): String {
     val props = properties
     val manufacturer = props.getString(MidiDeviceInfo.PROPERTY_MANUFACTURER)
     val product = props.getString(MidiDeviceInfo.PROPERTY_PRODUCT)
-    val name = listOfNotNull(manufacturer, product).joinToString(" ").ifBlank { product ?: manufacturer }
-    return name ?: "MIDI device ${id}"
+    val productLabel = listOfNotNull(manufacturer, product)
+        .joinToString(" ")
+        .ifBlank { product ?: manufacturer }
+    val reportedName = props.getString(MidiDeviceInfo.PROPERTY_NAME)
+    val bluetoothName = props.getBluetoothDevice()?.name
+    return listOfNotNull(reportedName, bluetoothName, productLabel)
+        .firstOrNull { !it.isNullOrBlank() }
+        ?: "MIDI device $id"
 }
 
 private fun MidiDeviceInfo.connectionLabel(): String {
@@ -740,4 +747,13 @@ private fun formatTime(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun Bundle.getBluetoothDevice(): BluetoothDevice? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelable(MidiDeviceInfo.PROPERTY_BLUETOOTH_DEVICE, BluetoothDevice::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        getParcelable(MidiDeviceInfo.PROPERTY_BLUETOOTH_DEVICE) as? BluetoothDevice
+    }
 }
