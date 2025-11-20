@@ -207,7 +207,10 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                 maxItemsInEachRow = 3
             ) {
                 tabs.forEachIndexed { index, tab ->
-                    ElevatedCard(onClick = { selectedTabIndex = index }) {
+                    ElevatedCard(
+                        modifier = Modifier.weight(1f, fill = true),
+                        onClick = { selectedTabIndex = index }
+                    ) {
                         Row(
                             modifier = Modifier
                                 .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -675,7 +678,7 @@ private fun LibrarySection(
     onToggleFavorite: (MidiFileItem) -> Unit,
     onAddToPlaylist: (MidiFileItem) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
             SectionHeader(
@@ -811,7 +814,7 @@ private fun FavoritesSection(
     onPlay: (Int) -> Unit,
     onRemove: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
             SectionHeader(
