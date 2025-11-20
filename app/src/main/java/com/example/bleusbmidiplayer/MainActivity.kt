@@ -230,7 +230,7 @@ private fun DeviceSection(
             Spacer(Modifier.height(8.dp))
             if (session != null) {
                 Column {
-                    Text(session.info.displayName(), fontWeight = FontWeight.Bold)
+                    Text(session.displayLabel(), fontWeight = FontWeight.Bold)
                     Text(session.info.connectionLabel(), style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = onDisconnect) {
@@ -271,7 +271,7 @@ private fun BleScanSection(
     scanState: BleScanUiState,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
-    onConnect: (String) -> Unit,
+    onConnect: (BlePeripheralItem) -> Unit,
 ) {
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -322,7 +322,7 @@ private fun BleScanSection(
 @Composable
 private fun BlePeripheralRow(
     item: BlePeripheralItem,
-    onConnect: (String) -> Unit,
+    onConnect: (BlePeripheralItem) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -355,7 +355,7 @@ private fun BlePeripheralRow(
                 )
             }
         }
-        Button(onClick = { onConnect(item.address) }) {
+        Button(onClick = { onConnect(item) }) {
             Text("Connect")
         }
     }
@@ -706,6 +706,8 @@ private fun MidiRow(
 }
 
 private val TreeIndent = 18.dp
+
+private fun MidiDeviceSession.displayLabel(): String = label ?: info.displayName()
 
 private fun PlaybackEngineState.currentFileId(): String? = when (this) {
     is PlaybackEngineState.Playing -> file.id

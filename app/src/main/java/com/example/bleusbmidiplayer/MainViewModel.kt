@@ -197,19 +197,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateBleScan { it.copy(isScanning = false) }
     }
 
-    fun connectBlePeripheral(address: String) {
+    fun connectBlePeripheral(peripheral: BlePeripheralItem) {
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
             _uiState.update { it.copy(message = "Bluetooth is disabled") }
             return
         }
         val device = try {
-            adapter.getRemoteDevice(address)
+            adapter.getRemoteDevice(peripheral.address)
         } catch (e: IllegalArgumentException) {
             _uiState.update { it.copy(message = "Unknown BLE device") }
             return
         }
-        deviceController.connectBluetoothDevice(device) { result ->
+        deviceController.connectBluetoothDevice(device, peripheral.name.ifBlank { null }) { result ->
             result.onFailure { error ->
                 _uiState.update { it.copy(message = error.message ?: "Unable to open BLE device") }
             }
@@ -367,4 +367,4 @@ data class BlePeripheralItem(
 )
 
 private val MIDI_SERVICE_UUID: UUID = UUID.fromString("03B80E5A-EDE8-4B33-A751-6CE34EC4C700")
-private const val SCAN_TIMEOUT_MS = 150_000L
+private const val SCAN_TIMEOUT_MS = 15_000L

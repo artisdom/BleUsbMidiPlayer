@@ -66,7 +66,11 @@ class MidiDeviceController(
         }, handler)
     }
 
-    fun connectBluetoothDevice(device: BluetoothDevice, onResult: (Result<MidiDeviceSession>) -> Unit) {
+    fun connectBluetoothDevice(
+        device: BluetoothDevice,
+        label: String? = null,
+        onResult: (Result<MidiDeviceSession>) -> Unit,
+    ) {
         midiManager.openBluetoothDevice(device, { midiDevice ->
             if (midiDevice == null) {
                 onResult(Result.failure(IllegalStateException("Unable to open BLE device")))
@@ -87,7 +91,8 @@ class MidiDeviceController(
             val session = MidiDeviceSession(
                 info = midiDevice.info,
                 device = midiDevice,
-                outputPort = inputPort
+                outputPort = inputPort,
+                label = label ?: device.name ?: midiDevice.info.properties.getString(MidiDeviceInfo.PROPERTY_PRODUCT)
             )
             closeActiveSession()
             _session.value = session
@@ -123,4 +128,5 @@ data class MidiDeviceSession(
     val info: MidiDeviceInfo,
     val device: MidiDevice,
     val outputPort: MidiInputPort,
+    val label: String? = null,
 )
