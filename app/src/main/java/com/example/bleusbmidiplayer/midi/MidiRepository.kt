@@ -4,12 +4,17 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class MidiRepository(
     private val context: Context,
     private val parser: MidiFileParser = MidiFileParser(),
 ) {
+    private val folderCache = mutableMapOf<Uri, FolderCacheEntry>()
+    private val cacheMutex = Mutex()
+
     fun listBundledMidi(): List<MidiFileItem> {
         val assetRoot = BUNDLED_MIDI_FOLDER
         val assetManager = context.assets
@@ -27,10 +32,20 @@ class MidiRepository(
             }
     }
 
-    suspend fun listFolderChildren(folderUri: Uri, treeUri: Uri): FolderListing =
+    suspend fun listFolderChildren(folderUri: Uri, treeUri: Uri, forceRefresh: Boolean = false): FolderListing =
         withContext(Dispatchers.IO) {
             val folder = resolveDocument(folderUri)
                 ?: throw IllegalArgumentException("Cannot access folder $folderUri")
+            val folderStamp = folder.lastModified()
+            cacheMutex.withLock {
+                val cached = folderCache[folderUri]
+                if (!forceRefresh && cached != null && cached.lastModified == folderStamp && cached.listing.midiFiles.isNotEmpty()) {
+                    return@withContext cached.listing
+                }
+                if (!forceRefresh && cached != null && folderStamp == 0L) {
+                    return@withContext cached.listing
+                }
+            }
             val directories = mutableListOf<MidiFolderItem>()
             val files = mutableListOf<MidiFileItem>()
             folder.listFiles().forEach { entry ->
@@ -49,10 +64,14 @@ class MidiRepository(
                     )
                 }
             }
-            FolderListing(
+            val listing = FolderListing(
                 directories = directories.sortedBy { it.name.lowercase() },
                 midiFiles = files.sortedBy { it.title.lowercase() },
             )
+            cacheMutex.withLock {
+                folderCache[folderUri] = FolderCacheEntry(folderStamp, listing)
+            }
+            listing
         }
 
     suspend fun loadSequence(item: MidiFileItem): MidiSequence? = withContext(Dispatchers.IO) {
@@ -64,6 +83,18 @@ class MidiRepository(
 
     fun resolveFolderName(uri: Uri): String? {
         return resolveDocument(uri)?.name
+    }
+
+    suspend fun invalidateFolder(uri: Uri) {
+        cacheMutex.withLock {
+            folderCache.remove(uri)
+        }
+    }
+
+    suspend fun clearCache() {
+        cacheMutex.withLock {
+            folderCache.clear()
+        }
     }
 
     private fun resolveDocument(uri: Uri): DocumentFile? {
@@ -84,4 +115,9 @@ class MidiRepository(
     companion object {
         private const val BUNDLED_MIDI_FOLDER = "midi"
     }
+
+    private data class FolderCacheEntry(
+        val lastModified: Long,
+        val listing: FolderListing,
+    )
 }

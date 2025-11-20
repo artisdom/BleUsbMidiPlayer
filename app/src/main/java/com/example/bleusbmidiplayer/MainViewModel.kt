@@ -14,15 +14,21 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.bleusbmidiplayer.data.MidiSettingsStore
+import com.example.bleusbmidiplayer.data.UserCollectionsSnapshot
+import com.example.bleusbmidiplayer.data.UserCollectionsStore
 import com.example.bleusbmidiplayer.midi.FolderNodeState
 import com.example.bleusbmidiplayer.midi.FolderTreeChildren
 import com.example.bleusbmidiplayer.midi.FolderTreeUiState
 import com.example.bleusbmidiplayer.midi.MidiDeviceController
 import com.example.bleusbmidiplayer.midi.MidiDeviceSession
 import com.example.bleusbmidiplayer.midi.MidiFileItem
+import com.example.bleusbmidiplayer.midi.MidiPlaylist
 import com.example.bleusbmidiplayer.midi.MidiPlaybackEngine
 import com.example.bleusbmidiplayer.midi.MidiRepository
 import com.example.bleusbmidiplayer.midi.PlaybackEngineState
+import com.example.bleusbmidiplayer.midi.TrackReference
+import com.example.bleusbmidiplayer.midi.toMidiFileItem
+import com.example.bleusbmidiplayer.midi.toTrackReference
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +38,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.ArrayDeque
 import java.util.UUID
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -42,6 +49,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
     private val repository = MidiRepository(application)
     private val settingsStore = MidiSettingsStore(application)
+    private val collectionsStore = UserCollectionsStore(application)
     private val deviceController = MidiDeviceController(midiManager)
     private val playbackEngine = MidiPlaybackEngine(viewModelScope)
     private var scanCallback: ScanCallback? = null
@@ -65,13 +73,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             deviceController.session.collect { session ->
                 if (session == null) {
                     playbackEngine.stop()
+                    updateQueue { PlaybackQueueState() }
                 }
                 _uiState.update { it.copy(activeSession = session) }
             }
         }
         viewModelScope.launch {
             playbackEngine.state.collect { state ->
+                if (state is PlaybackEngineState.Completed) {
+                    playNextInQueueInternal(userAction = false)
+                }
                 _uiState.update { it.copy(playbackState = state) }
+            }
+        }
+        viewModelScope.launch {
+            collectionsStore.snapshot.collect { snapshot ->
+                applyCollectionsSnapshot(snapshot)
             }
         }
     }
@@ -122,10 +139,290 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun updateQueue(transform: (PlaybackQueueState) -> PlaybackQueueState) {
+        _uiState.update { state -> state.copy(queue = transform(state.queue)) }
+    }
+
+    private fun applyCollectionsSnapshot(snapshot: UserCollectionsSnapshot) {
+        _uiState.update { state ->
+            state.copy(
+                favorites = snapshot.favorites,
+                playlists = snapshot.playlists,
+            )
+        }
+    }
+
     fun selectFolder(uri: Uri?) {
         viewModelScope.launch {
             settingsStore.updateFolder(uri)
         }
+    }
+
+    fun toggleFavorite(item: MidiFileItem) {
+        val reference = item.toTrackReference()
+        viewModelScope.launch {
+            collectionsStore.updateFavorites { favorites ->
+                if (favorites.any { it.id == reference.id }) {
+                    favorites.filterNot { it.id == reference.id }
+                } else {
+                    favorites + reference
+                }
+            }
+        }
+    }
+
+    fun removeFavorite(trackId: String) {
+        viewModelScope.launch {
+            collectionsStore.updateFavorites { favorites ->
+                favorites.filterNot { it.id == trackId }
+            }
+        }
+    }
+
+    fun addFolderToFavorites(folderUri: Uri) {
+        val root = _uiState.value.library.folderTree.selectedFolder ?: run {
+            _uiState.update { it.copy(message = "Select a folder first") }
+            return
+        }
+        viewModelScope.launch {
+            val tracks = collectFolderTracks(folderUri, root).map { it.toTrackReference() }
+            if (tracks.isEmpty()) {
+                _uiState.update { it.copy(message = "No MIDI files found in folder") }
+                return@launch
+            }
+            collectionsStore.updateFavorites { favorites ->
+                val merged = favorites.associateBy { it.id }.toMutableMap()
+                tracks.forEach { merged[it.id] = it }
+                merged.values.toList()
+            }
+        }
+    }
+
+    fun createPlaylist(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            collectionsStore.updatePlaylists { playlists ->
+                if (playlists.any { it.name.equals(name, ignoreCase = true) }) {
+                    playlists
+                } else {
+                    playlists + MidiPlaylist(id = UUID.randomUUID().toString(), name = name.trim())
+                }
+            }
+        }
+    }
+
+    fun addTrackToPlaylist(track: MidiFileItem, playlistId: String?, newPlaylistName: String?) {
+        val reference = track.toTrackReference()
+        viewModelScope.launch {
+            if (playlistId != null) {
+                collectionsStore.updatePlaylists { playlists ->
+                    playlists.map { playlist ->
+                        if (playlist.id == playlistId) {
+                            playlist.copy(tracks = playlist.tracks.addUnique(reference))
+                        } else {
+                            playlist
+                        }
+                    }
+                }
+                return@launch
+            }
+            val newName = newPlaylistName?.trim().orEmpty()
+            if (newName.isNotEmpty()) {
+                collectionsStore.updatePlaylists { playlists ->
+                    playlists + MidiPlaylist(
+                        id = UUID.randomUUID().toString(),
+                        name = newName,
+                        tracks = listOf(reference)
+                    )
+                }
+            }
+        }
+    }
+
+    fun addFolderToPlaylist(folderUri: Uri, playlistId: String?, newPlaylistName: String?) {
+        val root = _uiState.value.library.folderTree.selectedFolder ?: run {
+            _uiState.update { it.copy(message = "Select a folder first") }
+            return
+        }
+        viewModelScope.launch {
+            val refs = collectFolderTracks(folderUri, root).map { it.toTrackReference() }
+            if (refs.isEmpty()) {
+                _uiState.update { it.copy(message = "No MIDI files found in folder") }
+                return@launch
+            }
+            if (playlistId != null) {
+                collectionsStore.updatePlaylists { playlists ->
+                    playlists.map { playlist ->
+                        if (playlist.id == playlistId) {
+                            val merged = playlist.tracks.associateBy { it.id }.toMutableMap()
+                            refs.forEach { merged[it.id] = it }
+                            playlist.copy(tracks = merged.values.toList())
+                        } else {
+                            playlist
+                        }
+                    }
+                }
+                return@launch
+            }
+            val newName = newPlaylistName?.trim().orEmpty()
+            if (newName.isNotEmpty()) {
+                collectionsStore.updatePlaylists { playlists ->
+                    playlists + MidiPlaylist(
+                        id = UUID.randomUUID().toString(),
+                        name = newName,
+                        tracks = refs.distinctBy { it.id }
+                    )
+                }
+            }
+        }
+    }
+
+    fun renamePlaylist(playlistId: String, newName: String) {
+        if (newName.isBlank()) return
+        viewModelScope.launch {
+            collectionsStore.updatePlaylists { playlists ->
+                playlists.map { playlist ->
+                    if (playlist.id == playlistId) {
+                        playlist.copy(name = newName.trim())
+                    } else {
+                        playlist
+                    }
+                }
+            }
+        }
+    }
+
+    fun deletePlaylist(playlistId: String) {
+        viewModelScope.launch {
+            collectionsStore.updatePlaylists { playlists ->
+                playlists.filterNot { it.id == playlistId }
+            }
+            val queue = _uiState.value.queue
+            if (queue.mode is QueueMode.Playlist && queue.mode.playlistId == playlistId) {
+                updateQueue { PlaybackQueueState() }
+                playbackEngine.stop()
+            }
+        }
+    }
+
+    fun removeTrackFromPlaylist(playlistId: String, trackId: String) {
+        viewModelScope.launch {
+            collectionsStore.updatePlaylists { playlists ->
+                playlists.map { playlist ->
+                    if (playlist.id == playlistId) {
+                        playlist.copy(tracks = playlist.tracks.filterNot { it.id == trackId })
+                    } else {
+                        playlist
+                    }
+                }
+            }
+        }
+    }
+
+    fun shufflePlaylist(playlistId: String) {
+        viewModelScope.launch {
+            collectionsStore.updatePlaylists { playlists ->
+                playlists.map { playlist ->
+                    if (playlist.id == playlistId) {
+                        playlist.copy(tracks = playlist.tracks.shuffled())
+                    } else {
+                        playlist
+                    }
+                }
+            }
+        }
+    }
+
+    fun playFavorites(shuffle: Boolean = false) {
+        val favorites = _uiState.value.favorites
+        if (favorites.isEmpty()) {
+            _uiState.update { it.copy(message = "Favorites list is empty") }
+            return
+        }
+        val tracks = if (shuffle) favorites.shuffled() else favorites
+        playQueue(tracks, QueueMode.Favorites, startIndex = 0)
+    }
+
+    fun playPlaylist(playlistId: String, shuffle: Boolean = false) {
+        val playlist = _uiState.value.playlists.firstOrNull { it.id == playlistId }
+        if (playlist == null) {
+            _uiState.update { it.copy(message = "Playlist not found") }
+            return
+        }
+        if (playlist.tracks.isEmpty()) {
+            _uiState.update { it.copy(message = "Playlist is empty") }
+            return
+        }
+        val tracks = if (shuffle) playlist.tracks.shuffled() else playlist.tracks
+        playQueue(tracks, QueueMode.Playlist(playlistId), startIndex = 0)
+    }
+
+    fun playFavoriteAt(index: Int) {
+        val favorites = _uiState.value.favorites
+        if (index !in favorites.indices) return
+        playQueue(favorites, QueueMode.Favorites, index)
+    }
+
+    fun playPlaylistTrack(playlistId: String, index: Int) {
+        val playlist = _uiState.value.playlists.firstOrNull { it.id == playlistId } ?: return
+        if (index !in playlist.tracks.indices) return
+        playQueue(playlist.tracks, QueueMode.Playlist(playlistId), index)
+    }
+
+    fun generateRandomPlaylist() {
+        val root = _uiState.value.library.folderTree.selectedFolder ?: run {
+            _uiState.update { it.copy(message = "Select a folder first") }
+            return
+        }
+        viewModelScope.launch {
+            val refs = collectFolderTracks(root, root).map { it.toTrackReference() }
+            if (refs.isEmpty()) {
+                _uiState.update { it.copy(message = "No files available for playlist") }
+                return@launch
+            }
+            val selection = refs.shuffled().take(50)
+            val name = "Random Mix ${System.currentTimeMillis() % 1000}"
+            collectionsStore.updatePlaylists { playlists ->
+                playlists + MidiPlaylist(
+                    id = UUID.randomUUID().toString(),
+                    name = name,
+                    tracks = selection
+                )
+            }
+        }
+    }
+
+    fun play(item: MidiFileItem) {
+        val reference = item.toTrackReference()
+        playQueue(listOf(reference), QueueMode.Single(reference.title), 0)
+    }
+
+    fun stopPlayback() {
+        playbackEngine.stop()
+        updateQueue { PlaybackQueueState() }
+    }
+
+    fun playNextInQueue() {
+        playNextInQueueInternal(userAction = true)
+    }
+
+    fun playPreviousInQueue() {
+        val queue = _uiState.value.queue
+        if (queue.currentIndex <= 0) {
+            _uiState.update { it.copy(message = "Already at the beginning") }
+            return
+        }
+        playQueue(queue.tracks, queue.mode, queue.currentIndex - 1)
+    }
+
+    fun clearMessage() {
+        _uiState.update { it.copy(message = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopBleScan()
+        deviceController.dispose()
     }
 
     fun startBleScan() {
@@ -183,8 +480,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopBleScan() {
         scanTimeoutJob?.cancel()
         scanTimeoutJob = null
-        val adapter = bluetoothAdapter
-        val scanner = adapter?.bluetoothLeScanner
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
         val callback = scanCallback
         if (scanner != null && callback != null) {
             try {
@@ -214,6 +510,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(message = error.message ?: "Unable to open BLE device") }
             }
         }
+    }
+
+    fun refreshDevices() {
+        deviceController.refreshDevices()
+    }
+
+    fun connect(deviceInfo: MidiDeviceInfo) {
+        deviceController.openDevice(deviceInfo) { result ->
+            result.onFailure { error ->
+                _uiState.update { it.copy(message = error.message ?: "Unable to open device") }
+            }
+        }
+    }
+
+    fun disconnectDevice() {
+        deviceController.disconnect()
+        updateQueue { PlaybackQueueState() }
     }
 
     fun toggleFolder(uri: Uri) {
@@ -264,10 +577,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun handleScanResult(result: ScanResult) {
-        // Add debug log to print out each found device details
-        Log.d("MainViewModel", "Found device: ${result.device?.name} - ${result.device?.address}")
+    private suspend fun collectFolderTracks(folderUri: Uri, rootUri: Uri): List<MidiFileItem> {
+        val items = mutableListOf<MidiFileItem>()
+        val queue: ArrayDeque<Uri> = ArrayDeque()
+        queue.add(folderUri)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            val listing = repository.listFolderChildren(current, rootUri)
+            items += listing.midiFiles
+            listing.directories.forEach { queue.add(it.uri) }
+        }
+        return items
+    }
 
+    private fun playQueue(tracks: List<TrackReference>, mode: QueueMode, startIndex: Int) {
+        if (tracks.isEmpty()) {
+            _uiState.update { it.copy(message = "Nothing to play") }
+            return
+        }
+        val session = _uiState.value.activeSession
+        if (session == null) {
+            _uiState.update { it.copy(message = "Connect a MIDI device first") }
+            return
+        }
+        val targetIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        val reference = tracks[targetIndex]
+        viewModelScope.launch {
+            val item = reference.toMidiFileItem()
+            val sequence = repository.loadSequence(item)
+            if (sequence == null) {
+                _uiState.update { it.copy(message = "Unable to load ${reference.title}") }
+                return@launch
+            }
+            playbackEngine.play(sequence, session.outputPort, item)
+            updateQueue {
+                PlaybackQueueState(
+                    mode = mode,
+                    tracks = tracks,
+                    currentIndex = targetIndex,
+                )
+            }
+        }
+    }
+
+    private fun playNextInQueueInternal(userAction: Boolean) {
+        val queue = _uiState.value.queue
+        if (queue.currentIndex == -1 || queue.tracks.isEmpty()) return
+        val nextIndex = queue.currentIndex + 1
+        if (nextIndex >= queue.tracks.size) {
+            if (userAction) {
+                _uiState.update { it.copy(message = "Reached end of queue") }
+            } else {
+                updateQueue { it.copy(currentIndex = -1) }
+            }
+            return
+        }
+        playQueue(queue.tracks, queue.mode, nextIndex)
+    }
+
+    private fun handleScanResult(result: ScanResult) {
+        Log.d("MainViewModel", "Found device: ${result.device?.name} - ${result.device?.address}")
         val device = result.device ?: return
         val name = device.name ?: result.scanRecord?.deviceName ?: "Unnamed"
         val hasMidiWord = name.contains("midi", ignoreCase = true)
@@ -292,50 +661,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshDevices() {
-        deviceController.refreshDevices()
-    }
-
-    fun connect(deviceInfo: MidiDeviceInfo) {
-        deviceController.openDevice(deviceInfo) { result ->
-            result.onFailure { error ->
-                _uiState.update { it.copy(message = error.message ?: "Unable to open device") }
-            }
-        }
-    }
-
-    fun disconnectDevice() {
-        deviceController.disconnect()
-    }
-
-    fun play(item: MidiFileItem) {
-        val session = _uiState.value.activeSession
-        if (session == null) {
-            _uiState.update { it.copy(message = "Connect a MIDI device first") }
-            return
-        }
-        viewModelScope.launch {
-            val sequence = repository.loadSequence(item)
-            if (sequence == null) {
-                _uiState.update { it.copy(message = "Unable to load ${item.title}") }
-                return@launch
-            }
-            playbackEngine.play(sequence, session.outputPort, item)
-        }
-    }
-
-    fun stopPlayback() {
-        playbackEngine.stop()
-    }
-
-    fun clearMessage() {
-        _uiState.update { it.copy(message = null) }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        stopBleScan()
-        deviceController.dispose()
+    private fun List<TrackReference>.addUnique(track: TrackReference): List<TrackReference> {
+        return if (any { it.id == track.id }) this else this + track
     }
 }
 
@@ -345,6 +672,9 @@ data class MainUiState(
     val library: LibraryUiState = LibraryUiState(),
     val playbackState: PlaybackEngineState = PlaybackEngineState.Idle,
     val bleScan: BleScanUiState = BleScanUiState(),
+    val favorites: List<TrackReference> = emptyList(),
+    val playlists: List<MidiPlaylist> = emptyList(),
+    val queue: PlaybackQueueState = PlaybackQueueState(),
     val message: String? = null,
 )
 
@@ -365,6 +695,19 @@ data class BlePeripheralItem(
     val hasMidiService: Boolean,
     val rssi: Int,
 )
+
+data class PlaybackQueueState(
+    val mode: QueueMode = QueueMode.Idle,
+    val tracks: List<TrackReference> = emptyList(),
+    val currentIndex: Int = -1,
+)
+
+sealed interface QueueMode {
+    data object Idle : QueueMode
+    data object Favorites : QueueMode
+    data class Playlist(val playlistId: String) : QueueMode
+    data class Single(val title: String? = null) : QueueMode
+}
 
 private val MIDI_SERVICE_UUID: UUID = UUID.fromString("03B80E5A-EDE8-4B33-A751-6CE34EC4C700")
 private const val SCAN_TIMEOUT_MS = 15_000L
