@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.midi.MidiDeviceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -12,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,16 +22,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.bleusbmidiplayer.midi.FolderTreeRow
 import com.example.bleusbmidiplayer.midi.MidiDeviceSession
 import com.example.bleusbmidiplayer.midi.MidiFileItem
 import com.example.bleusbmidiplayer.midi.PlaybackEngineState
@@ -137,7 +145,7 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { folderLauncher.launch(uiState.library.selectedFolder) }) {
+            FloatingActionButton(onClick = { folderLauncher.launch(uiState.library.folderTree.selectedFolder) }) {
                 Icon(Icons.Default.Folder, contentDescription = "Pick MIDI folder")
             }
         }
@@ -176,7 +184,8 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                 UserFolderSection(
                     libraryState = uiState.library,
                     currentFileId = uiState.playbackState.currentFileId(),
-                    onPickFolder = { folderLauncher.launch(uiState.library.selectedFolder) },
+                    onPickFolder = { folderLauncher.launch(uiState.library.folderTree.selectedFolder) },
+                    onToggleFolder = viewModel::toggleFolder,
                     onPlay = viewModel::play,
                     onStop = viewModel::stopPlayback
                 )
@@ -373,9 +382,12 @@ private fun UserFolderSection(
     libraryState: LibraryUiState,
     currentFileId: String?,
     onPickFolder: () -> Unit,
+    onToggleFolder: (Uri) -> Unit,
     onPlay: (MidiFileItem) -> Unit,
     onStop: () -> Unit,
 ) {
+    val treeState = libraryState.folderTree
+    val rows = treeState.flatten()
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -383,41 +395,170 @@ private fun UserFolderSection(
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text("User folder", fontWeight = FontWeight.SemiBold)
-                    val folderText = libraryState.selectedFolder?.path ?: "No folder selected"
+                    val folderText = treeState.root?.name
+                        ?: treeState.selectedFolder?.path
+                        ?: "No folder selected"
                     Text(folderText, style = MaterialTheme.typography.bodySmall)
                 }
             }
             Spacer(Modifier.height(8.dp))
             Row {
                 Button(onClick = onPickFolder) {
-                    Text(if (libraryState.selectedFolder == null) "Choose folder" else "Change folder")
+                    Text(if (treeState.selectedFolder == null) "Choose folder" else "Change folder")
                 }
-                if (libraryState.isLoading) {
-                    Spacer(Modifier.width(12.dp))
-                    LinearProgressIndicator(modifier = Modifier.width(72.dp))
-                }
-            }
-            libraryState.error?.let { error ->
-                Spacer(Modifier.height(8.dp))
-                Text(error, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(16.dp))
-            if (libraryState.external.isEmpty() && libraryState.selectedFolder != null && !libraryState.isLoading) {
-                Text("No MIDI files found in the selected folder.")
-            } else {
-                libraryState.external.forEachIndexed { index, item ->
-                    MidiRow(
-                        midi = item,
-                        isActive = currentFileId == item.id,
-                        onPlay = { onPlay(item) },
-                        onStop = onStop
+            when {
+                treeState.selectedFolder == null -> {
+                    Text("Pick a folder to browse your MIDI collection.")
+                }
+
+                treeState.globalError != null -> {
+                    Text(
+                        treeState.globalError,
+                        color = MaterialTheme.colorScheme.error
                     )
-                    if (index != libraryState.external.lastIndex) {
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+                }
+
+                treeState.root == null -> {
+                    Text("Unable to access the selected folder. Try choosing it again.")
+                }
+
+                rows.isEmpty() -> {
+                    Text("Tap the folder row below to expand and load its contents.")
+                }
+
+                else -> {
+                    rows.forEach { row ->
+                        when (row) {
+                            is FolderTreeRow.DirectoryRow -> {
+                                DirectoryTreeRow(
+                                    row = row,
+                                    onToggle = onToggleFolder
+                                )
+                            }
+
+                            is FolderTreeRow.FileRow -> {
+                                MidiTreeFileRow(
+                                    row = row,
+                                    isActive = currentFileId == row.file.id,
+                                    onPlay = { onPlay(row.file) },
+                                    onStop = onStop
+                                )
+                            }
+
+                            is FolderTreeRow.PlaceholderRow -> {
+                                FolderPlaceholderRow(row)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DirectoryTreeRow(
+    row: FolderTreeRow.DirectoryRow,
+    onToggle: (Uri) -> Unit,
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle(row.directory.uri) }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Spacer(Modifier.width(TreeIndent * row.depth))
+            Icon(
+                imageVector = if (row.isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                contentDescription = null
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Default.Folder, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(row.directory.name, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            when {
+                row.isLoading -> {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+
+                row.isEmpty && row.isExpanded -> {
+                    Text("Empty", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+        }
+        row.error?.let { error ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.width(TreeIndent * (row.depth + 1)))
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MidiTreeFileRow(
+    row: FolderTreeRow.FileRow,
+    isActive: Boolean,
+    onPlay: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Spacer(Modifier.width(TreeIndent * row.depth))
+        Icon(Icons.Default.MusicNote, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = row.file.title,
+                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+            )
+            Text(
+                text = row.file.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (isActive) {
+            IconButton(onClick = onStop) {
+                Icon(Icons.Default.Stop, contentDescription = "Stop")
+            }
+        } else {
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPlaceholderRow(row: FolderTreeRow.PlaceholderRow) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Spacer(Modifier.width(TreeIndent * row.depth))
+        Text(
+            row.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline
+        )
     }
 }
 
@@ -449,6 +590,8 @@ private fun MidiRow(
         }
     )
 }
+
+private val TreeIndent = 18.dp
 
 private fun PlaybackEngineState.currentFileId(): String? = when (this) {
     is PlaybackEngineState.Playing -> file.id

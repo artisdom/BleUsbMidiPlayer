@@ -27,34 +27,48 @@ class MidiRepository(
             }
     }
 
-    suspend fun listExternalMidi(treeUri: Uri?): List<MidiFileItem> = withContext(Dispatchers.IO) {
-        if (treeUri == null) return@withContext emptyList()
-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext emptyList()
-        val items = mutableListOf<MidiFileItem>()
-        fun visit(node: DocumentFile) {
-            if (!node.canRead()) return
-            if (node.isDirectory) {
-                node.listFiles().forEach { visit(it) }
-                return
+    suspend fun listFolderChildren(folderUri: Uri, treeUri: Uri): FolderListing =
+        withContext(Dispatchers.IO) {
+            val folder = resolveDocument(folderUri)
+                ?: throw IllegalArgumentException("Cannot access folder $folderUri")
+            val directories = mutableListOf<MidiFolderItem>()
+            val files = mutableListOf<MidiFileItem>()
+            folder.listFiles().forEach { entry ->
+                if (!entry.canRead()) return@forEach
+                if (entry.isDirectory) {
+                    directories += MidiFolderItem(
+                        uri = entry.uri,
+                        name = entry.name ?: "Folder",
+                    )
+                } else if (entry.isMidiFile()) {
+                    val title = entry.name?.substringBeforeLast('.') ?: "MIDI"
+                    files += MidiFileItem(
+                        id = entry.uri.toString(),
+                        title = title,
+                        source = MidiFileSource.Document(uri = entry.uri, treeUri = treeUri),
+                    )
+                }
             }
-            if (node.isMidiFile()) {
-                val title = node.name?.substringBeforeLast('.') ?: "MIDI"
-                items += MidiFileItem(
-                    id = node.uri.toString(),
-                    title = title,
-                    source = MidiFileSource.Document(uri = node.uri, treeUri = treeUri),
-                )
-            }
+            FolderListing(
+                directories = directories.sortedBy { it.name.lowercase() },
+                midiFiles = files.sortedBy { it.title.lowercase() },
+            )
         }
-        visit(root)
-        return@withContext items.sortedBy { it.title }
-    }
 
     suspend fun loadSequence(item: MidiFileItem): MidiSequence? = withContext(Dispatchers.IO) {
         when (val source = item.source) {
             is MidiFileSource.Asset -> context.assets.open(source.assetPath).use(parser::parse)
             is MidiFileSource.Document -> context.contentResolver.openInputStream(source.uri)?.use(parser::parse)
         }
+    }
+
+    fun resolveFolderName(uri: Uri): String? {
+        return resolveDocument(uri)?.name
+    }
+
+    private fun resolveDocument(uri: Uri): DocumentFile? {
+        return DocumentFile.fromTreeUri(context, uri)
+            ?: DocumentFile.fromSingleUri(context, uri)
     }
 
     private fun DocumentFile.isMidiFile(): Boolean {

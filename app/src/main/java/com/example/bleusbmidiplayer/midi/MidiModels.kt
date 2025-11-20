@@ -35,3 +35,13 @@ data class MidiSequence(
     val events: List<MidiEvent>,
     val durationMs: Long,
 )
+
+data class MidiFolderItem(
+    val uri: Uri,
+    val name: String,
+)
+
+data class FolderListing(
+    val directories: List<MidiFolderItem>,
+    val midiFiles: List<MidiFileItem>,
+)

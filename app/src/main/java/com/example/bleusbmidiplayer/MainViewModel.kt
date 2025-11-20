@@ -7,13 +7,15 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.bleusbmidiplayer.data.MidiSettingsStore
+import com.example.bleusbmidiplayer.midi.FolderNodeState
+import com.example.bleusbmidiplayer.midi.FolderTreeChildren
+import com.example.bleusbmidiplayer.midi.FolderTreeUiState
 import com.example.bleusbmidiplayer.midi.MidiDeviceController
 import com.example.bleusbmidiplayer.midi.MidiDeviceSession
 import com.example.bleusbmidiplayer.midi.MidiFileItem
 import com.example.bleusbmidiplayer.midi.MidiPlaybackEngine
 import com.example.bleusbmidiplayer.midi.MidiRepository
 import com.example.bleusbmidiplayer.midi.PlaybackEngineState
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,8 +38,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
-
-    private var libraryJob: Job? = null
 
     init {
         observeFolderSelection()
@@ -64,52 +64,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeFolderSelection() {
         viewModelScope.launch {
             settingsStore.selectedFolder.collectLatest { uri ->
-                loadExternalFiles(uri)
+                resetFolderTree(uri)
             }
         }
     }
 
-    private fun loadExternalFiles(uri: Uri?) {
-        libraryJob?.cancel()
-        libraryJob = viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    library = it.library.copy(
-                        isLoading = true,
-                        selectedFolder = uri,
-                        error = null
-                    )
+    private fun resetFolderTree(uri: Uri?) {
+        val displayName = uri?.let { repository.resolveFolderName(it) }
+            ?: uri?.lastPathSegment
+        val rootNode = if (uri != null && displayName != null) {
+            FolderNodeState(uri = uri, name = displayName)
+        } else {
+            null
+        }
+        val error = if (uri != null && rootNode == null) {
+            "Unable to access selected folder"
+        } else {
+            null
+        }
+        updateFolderTree {
+            FolderTreeUiState(
+                selectedFolder = uri,
+                root = rootNode,
+                globalError = error,
+            )
+        }
+    }
+
+    private fun updateFolderTree(transform: (FolderTreeUiState) -> FolderTreeUiState) {
+        _uiState.update { state ->
+            state.copy(
+                library = state.library.copy(
+                    folderTree = transform(state.library.folderTree)
                 )
-            }
-            try {
-                val files = repository.listExternalMidi(uri)
-                _uiState.update {
-                    it.copy(
-                        library = it.library.copy(
-                            external = files,
-                            selectedFolder = uri,
-                            isLoading = false,
-                            error = null
-                        )
-                    )
-                }
-            } catch (t: Throwable) {
-                _uiState.update {
-                    it.copy(
-                        library = it.library.copy(
-                            isLoading = false,
-                            selectedFolder = uri,
-                            error = t.message ?: "Unable to read folder"
-                        )
-                    )
-                }
-            }
+            )
         }
     }
 
     fun selectFolder(uri: Uri?) {
         viewModelScope.launch {
             settingsStore.updateFolder(uri)
+        }
+    }
+
+    fun toggleFolder(uri: Uri) {
+        val tree = _uiState.value.library.folderTree
+        if (tree.root == null) return
+        val isExpanded = tree.expanded.contains(uri)
+        val newExpanded = if (isExpanded) tree.expanded - uri else tree.expanded + uri
+        updateFolderTree { it.copy(expanded = newExpanded) }
+        if (!isExpanded) {
+            ensureFolderChildren(uri)
+        }
+    }
+
+    private fun ensureFolderChildren(folderUri: Uri) {
+        val tree = _uiState.value.library.folderTree
+        val selectedRoot = tree.selectedFolder ?: return
+        if (tree.childMap.containsKey(folderUri) || tree.loading.contains(folderUri)) return
+        updateFolderTree {
+            it.copy(
+                loading = it.loading + folderUri,
+                errors = it.errors - folderUri,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val listing = repository.listFolderChildren(folderUri, selectedRoot)
+                val children = FolderTreeChildren(
+                    directories = listing.directories.map { dir ->
+                        FolderNodeState(uri = dir.uri, name = dir.name)
+                    },
+                    files = listing.midiFiles
+                )
+                updateFolderTree {
+                    it.copy(
+                        loading = it.loading - folderUri,
+                        childMap = it.childMap + (folderUri to children),
+                        errors = it.errors - folderUri,
+                    )
+                }
+            } catch (t: Throwable) {
+                updateFolderTree {
+                    it.copy(
+                        loading = it.loading - folderUri,
+                        errors = it.errors + (folderUri to (t.message ?: "Unable to read folder")),
+                    )
+                }
+            }
         }
     }
 
@@ -169,8 +211,5 @@ data class MainUiState(
 
 data class LibraryUiState(
     val bundled: List<MidiFileItem> = emptyList(),
-    val external: List<MidiFileItem> = emptyList(),
-    val selectedFolder: Uri? = null,
-    val isLoading: Boolean = false,
-    val error: String? = null,
+    val folderTree: FolderTreeUiState = FolderTreeUiState(),
 )
