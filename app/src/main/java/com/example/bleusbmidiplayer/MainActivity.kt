@@ -8,21 +8,25 @@ import android.media.midi.MidiDeviceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +49,8 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
@@ -53,8 +59,9 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ElevatedCard
@@ -75,10 +82,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -100,6 +113,10 @@ import com.example.bleusbmidiplayer.midi.TrackReferenceSource
 import com.example.bleusbmidiplayer.ui.theme.BleUsbMidiPlayerTheme
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import com.example.bleusbmidiplayer.practice.PracticeNotationEngine
+import kotlinx.coroutines.delay
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothPermissionLauncher: ActivityResultLauncher<Array<String>>
@@ -155,11 +172,11 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
         listOf(
             TabItem(MainTab.DEVICES, "Devices", Icons.Default.Bluetooth),
             TabItem(MainTab.PLAYBACK, "Playback", Icons.Default.PlayArrow),
+            TabItem(MainTab.PRACTICE, "Practice", Icons.Default.Visibility),
             TabItem(MainTab.FAVORITES, "Favorites", Icons.Default.Favorite),
             TabItem(MainTab.PLAYLISTS, "Playlists", Icons.Default.QueueMusic),
             TabItem(MainTab.BUNDLED, "Bundled", Icons.Default.LibraryMusic),
             TabItem(MainTab.USER_FOLDER, "User folder", Icons.Default.Folder),
-            TabItem(MainTab.SHEETS, "Sheet music", Icons.Default.Visibility),
         )
     }
     var selectedTabIndex by remember { mutableStateOf(0) }
@@ -291,22 +308,30 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                                 favoriteIds = favoriteIds
                             )
                         }
-                        item {
-                            PracticeControls(
-                                practiceMode = uiState.practiceMode,
-                                practiceProgress = uiState.practiceProgress,
-                                onModeChange = viewModel::setPracticeMode
-                            )
-                        }
-                        item {
-                            if (uiState.chord != null) {
-                                Text("Chord: ${uiState.chord}", style = MaterialTheme.typography.bodyLarge)
-                            }
-                            uiState.lastInboundEvent?.let {
-                                Text("Last note data: ${it.data.joinToString(" ") { b -> b.toUByte().toString(16) }}")
-                            }
-                        }
                     }
+                }
+
+                MainTab.PRACTICE -> {
+                    PracticeTab(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        playbackState = uiState.playbackState,
+                        practiceMode = uiState.practiceMode,
+                        practiceProgress = uiState.practiceProgress,
+                        sheetLibrary = uiState.sheetLibrary,
+                        selectedSheet = uiState.selectedSheet,
+                        sheetSequence = uiState.selectedSheetSequence,
+                        sheetFullscreen = uiState.sheetFullscreen,
+                        visualizerState = uiState.practiceVisualizer,
+                        chord = uiState.chord,
+                        onModeChange = viewModel::setPracticeMode,
+                        onSelectSheet = viewModel::selectSheet,
+                        onToggleFullscreen = viewModel::toggleSheetFullscreen,
+                        onSyncSheet = viewModel::syncSheetWithPlayback,
+                        onScrub = viewModel::scrubPracticeTimeline,
+                        onVirtualKeyPress = viewModel::onVirtualKeyPress
+                    )
                 }
 
                 MainTab.FAVORITES -> {
@@ -397,25 +422,6 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                                 onAddFolderToPlaylist = { folder ->
                                     playlistDialogTarget = PlaylistTarget.Folder(folder.uri, folder.name)
                                 }
-                            )
-                        }
-                    }
-                }
-                MainTab.SHEETS -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        item {
-                            SheetMusicSection(
-                                library = uiState.sheetLibrary,
-                                selected = uiState.selectedSheet,
-                                sequence = uiState.selectedSheetSequence,
-                                fullscreen = uiState.sheetFullscreen,
-                                onSelect = viewModel::selectSheet,
-                                onToggleFullscreen = viewModel::toggleSheetFullscreen
                             )
                         }
                     }
@@ -858,60 +864,329 @@ private fun PracticeChip(label: String, selected: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun SheetMusicSection(
-    library: List<MidiFileItem>,
-    selected: MidiFileItem?,
-    sequence: MidiSequence?,
-    fullscreen: Boolean,
-    onSelect: (MidiFileItem) -> Unit,
+private fun PracticeTab(
+    modifier: Modifier = Modifier,
+    playbackState: PlaybackEngineState,
+    practiceMode: PracticeMode,
+    practiceProgress: PracticeProgress,
+    sheetLibrary: List<MidiFileItem>,
+    selectedSheet: MidiFileItem?,
+    sheetSequence: MidiSequence?,
+    sheetFullscreen: Boolean,
+    visualizerState: PracticeVisualizerState,
+    chord: String?,
+    onModeChange: (PracticeMode) -> Unit,
+    onSelectSheet: (MidiFileItem) -> Unit,
     onToggleFullscreen: () -> Unit,
+    onSyncSheet: () -> Unit,
+    onScrub: (Float) -> Unit,
+    onVirtualKeyPress: (Int) -> Unit,
+) {
+    var sheetVisible by rememberSaveable(selectedSheet?.id) { mutableStateOf(true) }
+    val playbackPosition = when (playbackState) {
+        is PlaybackEngineState.Playing -> playbackState.positionMs
+        is PlaybackEngineState.Paused -> playbackState.positionMs
+        is PlaybackEngineState.Completed -> sheetSequence?.durationMs
+        is PlaybackEngineState.Error -> sheetSequence?.durationMs
+        PlaybackEngineState.Idle -> null
+    }
+    LazyColumn(
+        modifier = modifier
+            .fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            PracticeSheetPanel(
+                sheetLibrary = sheetLibrary,
+                selectedSheet = selectedSheet,
+                sheetSequence = sheetSequence,
+                sheetVisible = sheetVisible,
+                playbackPosition = playbackPosition,
+                onToggleVisibility = { sheetVisible = !sheetVisible },
+                onSelectSheet = onSelectSheet,
+                onSyncSheet = onSyncSheet,
+                onToggleFullscreen = onToggleFullscreen,
+                onScrub = onScrub,
+            )
+        }
+        item {
+            PracticeControls(
+                practiceMode = practiceMode,
+                practiceProgress = practiceProgress,
+                onModeChange = onModeChange
+            )
+        }
+        item {
+            PracticeAnalyticsCard(
+                practiceProgress = practiceProgress,
+                analytics = visualizerState.analytics,
+                chord = chord
+            )
+        }
+        item {
+            FallingNotesStage(notes = visualizerState.fallingNotes)
+        }
+        item {
+            VirtualKeyboardCard(
+                pressedKeys = visualizerState.pressedKeys,
+                notes = visualizerState.fallingNotes,
+                fingerHints = visualizerState.fingerHints,
+                onVirtualKeyPress = onVirtualKeyPress
+            )
+        }
+    }
+    if (sheetFullscreen && sheetSequence != null) {
+        AlertDialog(
+            onDismissRequest = onToggleFullscreen,
+            text = {
+                Column {
+                    Text(selectedSheet?.title ?: "Sheet", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(12.dp))
+                    PracticeNotationSurface(
+                        sequence = sheetSequence,
+                        playbackPosition = playbackPosition,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(420.dp),
+                        onSeek = onScrub
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onToggleFullscreen) { Text("Close") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun PracticeSheetPanel(
+    sheetLibrary: List<MidiFileItem>,
+    selectedSheet: MidiFileItem?,
+    sheetSequence: MidiSequence?,
+    sheetVisible: Boolean,
+    playbackPosition: Long?,
+    onToggleVisibility: () -> Unit,
+    onSelectSheet: (MidiFileItem) -> Unit,
+    onSyncSheet: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onScrub: (Float) -> Unit,
 ) {
     ElevatedCard {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("Sheet music", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Practice sheet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        selectedSheet?.title ?: "Tap a song or sync with playback",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                IconButton(onClick = onToggleVisibility) {
+                    Icon(
+                        imageVector = if (sheetVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (sheetVisible) "Hide sheet" else "Show sheet"
+                    )
+                }
+                IconButton(onClick = onToggleFullscreen, enabled = sheetSequence != null) {
+                    Icon(Icons.Default.Fullscreen, contentDescription = "Full screen")
+                }
+            }
             Spacer(Modifier.height(8.dp))
-            if (library.isEmpty()) {
-                Text("No sheet songs found in assets/midi/JustPiano2-20160326")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = onSyncSheet) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Sync to playback")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (sheetLibrary.isEmpty()) {
+                Text("No sheet-ready MIDI assets were bundled.")
             } else {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    maxItemsInEachRow = 2
+                    maxItemsInEachRow = 3
                 ) {
-                    library.forEach { item ->
-                        Button(onClick = { onSelect(item) }) {
-                            Text(item.title)
-                        }
+                    sheetLibrary.forEach { item ->
+                        AssistChip(
+                            onClick = { onSelectSheet(item) },
+                            label = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            leadingIcon = if (selectedSheet?.id == item.id) {
+                                { Icon(Icons.Default.Check, contentDescription = null) }
+                            } else null
+                        )
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            if (sequence != null && selected != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Preview: ${selected.title}", fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.width(12.dp))
-                    TextButton(onClick = onToggleFullscreen) {
-                        Icon(Icons.Default.Visibility, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (fullscreen) "Exit full screen" else "Full screen")
+            if (sheetVisible && sheetSequence != null) {
+                Spacer(Modifier.height(12.dp))
+                PracticeNotationSurface(
+                    sequence = sheetSequence,
+                    playbackPosition = playbackPosition,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp),
+                    onSeek = onScrub
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Tap notes to jump the transport. Hold full screen to focus on reading.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            } else if (sheetVisible) {
+                Spacer(Modifier.height(8.dp))
+                Text("Load a MIDI file to preview its notation.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PracticeNotationSurface(
+    sequence: MidiSequence,
+    playbackPosition: Long?,
+    modifier: Modifier = Modifier,
+    onSeek: (Float) -> Unit,
+) {
+    val engine = remember(sequence) { PracticeNotationEngine(sequence) }
+    val duration = sequence.durationMs.coerceAtLeast(1)
+    val progress = playbackPosition?.let { min(1f, it.toFloat() / duration.toFloat()) }
+    val staffColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    val noteColor = MaterialTheme.colorScheme.primary
+    val progressColor = MaterialTheme.colorScheme.secondary
+    Canvas(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .pointerInput(engine) {
+                detectTapGestures { offset ->
+                    if (size.width > 0f) {
+                        val ratio = (offset.x / size.width).coerceIn(0f, 1f)
+                        onSeek(ratio)
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                SheetCanvas(sequence = sequence, modifier = Modifier.height(220.dp).fillMaxWidth())
-                if (fullscreen) {
-                    AlertDialog(
-                        onDismissRequest = onToggleFullscreen,
-                        text = {
-                            Column {
-                                Text(selected.title, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.height(12.dp))
-                                SheetCanvas(sequence = sequence, modifier = Modifier.height(400.dp).fillMaxWidth())
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = onToggleFullscreen) { Text("Close") }
-                        }
-                    )
+            }
+    ) {
+        val measureCount = engine.measures.size.coerceAtLeast(1)
+        val measureWidth = size.width / measureCount
+        val staffSpacing = size.height / 10f
+        repeat(10) { index ->
+            val y = staffSpacing * (index + 1)
+            drawLine(
+                color = staffColor,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1.5f
+            )
+        }
+        engine.measures.forEachIndexed { idx, measure ->
+            val x = measureWidth * idx
+            drawLine(
+                color = staffColor,
+                start = Offset(x, staffSpacing),
+                end = Offset(x, size.height - staffSpacing),
+                strokeWidth = 1f
+            )
+            val measureSpan = (measure.endTime - measure.startTime).coerceAtLeast(1L).toFloat()
+            measure.notes.forEach { note ->
+                val relativeStart = (note.startTime - measure.startTime).coerceAtLeast(0L).toFloat()
+                val relTime = (relativeStart / measureSpan).coerceIn(0f, 1f)
+                val noteX = x + relTime.coerceIn(0f, 1f) * measureWidth
+                val pitchRatio = (note.pitch - engine.minPitch).toFloat() /
+                        (engine.maxPitch - engine.minPitch + 1).toFloat()
+                val noteY = size.height - pitchRatio.coerceIn(0f, 1f) * (size.height - staffSpacing) - staffSpacing
+                val radius = 6f + (note.velocity / 8f)
+                drawRect(
+                    color = noteColor,
+                    topLeft = Offset(noteX - radius, noteY - radius),
+                    size = Size(radius * 2f, radius * 1.3f)
+                )
+            }
+        }
+        progress?.let { ratio ->
+            drawLine(
+                color = progressColor,
+                start = Offset(ratio * size.width, 0f),
+                end = Offset(ratio * size.width, size.height),
+                strokeWidth = 3f
+            )
+        }
+    }
+}
+
+@Composable
+private fun PracticeAnalyticsCard(
+    practiceProgress: PracticeProgress,
+    analytics: PracticeAnalyticsSnapshot,
+    chord: String?,
+) {
+    ElevatedCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Practice analytics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            when (practiceProgress) {
+                PracticeProgress.Idle -> Text("No guided session in progress.")
+                is PracticeProgress.Active -> {
+                    Text("Progress ${practiceProgress.completed}/${practiceProgress.total}")
+                    practiceProgress.nextPitch?.let { next ->
+                        Text("Next pitch: MIDI $next", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                is PracticeProgress.Done -> Text("Completed ${practiceProgress.fileTitle}")
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PracticeMetric("Accuracy", "${(analytics.accuracy * 100).roundToInt()}%")
+                PracticeMetric("Streak", "${analytics.streak}/${analytics.longestStreak}")
+                val mistakes = analytics.mistakes
+                PracticeMetric("Mistakes", "$mistakes")
+            }
+            chord?.let {
+                Spacer(Modifier.height(4.dp))
+                Text("Current chord: $it", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PracticeMetric(label: String, value: String) {
+    Column {
+        Text(value, fontWeight = FontWeight.Bold)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+    }
+}
+
+@Composable
+private fun FallingNotesStage(
+    notes: List<VisualizerNote>,
+    modifier: Modifier = Modifier
+        .fillMaxWidth()
+        .height(160.dp),
+) {
+    val clock = rememberKeyboardClock()
+    ElevatedCard {
+        Box(modifier = Modifier.padding(12.dp)) {
+            if (notes.isEmpty()) {
+                Text("Play a few notes to see falling animations.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Canvas(modifier = modifier) {
+                    val range = (PracticeKeyboardMax - PracticeKeyboardMin).coerceAtLeast(1)
+                    notes.forEach { note ->
+                        val elapsed = (clock - note.startedAt).coerceAtLeast(0L)
+                        val progress = (elapsed.toFloat() / note.durationMs.toFloat()).coerceIn(0f, 1f)
+                        val xRatio = (note.pitch - PracticeKeyboardMin).toFloat() / range.toFloat()
+                        val x = xRatio.coerceIn(0f, 1f) * size.width
+                        val y = size.height * (1f - progress)
+                        val color = pitchToColor(note.pitch)
+                        drawRect(
+                            color = color,
+                            topLeft = Offset(x - 8f, y),
+                            size = Size(16f, 32f * (1f - progress + 0.2f))
+                        )
+                    }
                 }
             }
         }
@@ -919,51 +1194,196 @@ private fun SheetMusicSection(
 }
 
 @Composable
-private fun SheetCanvas(sequence: MidiSequence, modifier: Modifier = Modifier) {
-    val notes: List<Pair<Long, Int>> = sequence.events.mapNotNull { evt ->
-        val status = evt.data.getOrNull(0)?.toInt() ?: return@mapNotNull null
-        val command = status and 0xF0
-        val note = evt.data.getOrNull(1)?.toInt()?.and(0xFF) ?: return@mapNotNull null
-        val velocity = evt.data.getOrNull(2)?.toInt()?.and(0xFF) ?: 0
-        val isNoteOn = command == 0x90 && velocity > 0
-        if (isNoteOn) Pair(evt.timestampMs, note) else null
-    }
-    if (notes.isEmpty()) {
-        Text("Unable to render notes for this track.")
-        return
-    }
-    val minTime = notes.minOf { pair -> pair.first }
-    val maxTime = notes.maxOf { pair -> pair.first }.coerceAtLeast(minTime + 1)
-    val minPitch = notes.minOf { pair -> pair.second }
-    val maxPitch = notes.maxOf { pair -> pair.second }
-    val staffColor = MaterialTheme.colorScheme.outline
-    val noteColor = MaterialTheme.colorScheme.primary
-    val surface = MaterialTheme.colorScheme.surfaceVariant
-    Canvas(modifier = modifier.background(surface)) {
-        val staffCount = 2
-        val staffSpacing = size.height / (staffCount * 2f)
-        repeat(staffCount * 2) { line ->
-            val y = staffSpacing * (line + 1)
-            drawLine(
-                color = staffColor,
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 2f
-            )
-        }
-        notes.forEach { (time, pitch) ->
-            val xRatio = (time - minTime).toFloat() / (maxTime - minTime).toFloat()
-            val x = xRatio * size.width
-            val yRatio = (pitch - minPitch).toFloat() / (maxPitch - minPitch + 1).toFloat()
-            val y = size.height - yRatio * size.height
-            drawRect(
-                color = noteColor,
-                topLeft = Offset(x, y - 6f),
-                size = Size(10f, 12f)
+private fun VirtualKeyboardCard(
+    pressedKeys: Set<Int>,
+    notes: List<VisualizerNote>,
+    fingerHints: Map<Int, FingerHint>,
+    onVirtualKeyPress: (Int) -> Unit,
+) {
+    ElevatedCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Virtual piano", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            if (fingerHints.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    maxItemsInEachRow = 3
+                ) {
+                    fingerHints.values
+                        .distinctBy { it.pitch }
+                        .sortedBy { it.pitch }
+                        .take(6)
+                        .forEach { hint ->
+                            AssistChip(
+                                onClick = {},
+                                enabled = false,
+                                label = {
+                                    Text("${hint.pitch} • ${if (hint.hand == PracticeHand.Left) "LH" else "RH"} ${hint.finger}")
+                                }
+                            )
+                        }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            VirtualPianoKeyboard(
+                pressedKeys = pressedKeys,
+                notes = notes,
+                onKeyPress = onVirtualKeyPress,
             )
         }
     }
 }
+
+@Composable
+private fun VirtualPianoKeyboard(
+    pressedKeys: Set<Int>,
+    notes: List<VisualizerNote>,
+    onKeyPress: (Int) -> Unit,
+) {
+    val clock = rememberKeyboardClock()
+    val keys = remember { buildKeyboardLayout(PracticeKeyboardMin..PracticeKeyboardMax) }
+    val whiteKeys = keys.filter { !it.isSharp }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(200.dp)
+    ) {
+        Row(modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = 32.dp)
+        ) {
+            whiteKeys.forEach { key ->
+                val isPressed = pressedKeys.contains(key.pitch)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(horizontal = 2.dp)
+                        .background(
+                            color = if (isPressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.White,
+                            shape = RoundedCornerShape(6.dp)
+                        )
+                        .clickable { onKeyPress(key.pitch) }
+                        .padding(bottom = 8.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(
+                        key.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 48.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            whiteKeys.forEach { white ->
+                val semitone = white.pitch % 12
+                val hasSharp = semitone !in listOf(4, 11) && white.pitch + 1 <= PracticeKeyboardMax
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    if (hasSharp) {
+                        val sharpPitch = white.pitch + 1
+                        Box(
+                            modifier = Modifier
+                                .width(32.dp)
+                                .height(110.dp)
+                                .padding(horizontal = 4.dp)
+                                .background(
+                                    color = if (pressedKeys.contains(sharpPitch)) MaterialTheme.colorScheme.secondary else Color.Black,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .clickable { onKeyPress(sharpPitch) }
+                        )
+                    }
+                }
+            }
+        }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val range = (PracticeKeyboardMax - PracticeKeyboardMin).coerceAtLeast(1)
+            notes.forEach { note ->
+                val elapsed = (clock - note.startedAt).coerceAtLeast(0L)
+                val progress = (elapsed.toFloat() / note.durationMs.toFloat()).coerceIn(0f, 1f)
+                val baseY = size.height - 32f
+                val y = baseY - (progress * 80f)
+                val xRatio = (note.pitch - PracticeKeyboardMin).toFloat() / range.toFloat()
+                val x = xRatio.coerceIn(0f, 1f) * size.width
+                drawRect(
+                    color = pitchToColor(note.pitch),
+                    topLeft = Offset(x - 6f, y),
+                    size = Size(12f, 12f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberKeyboardClock(): Long {
+    val clock by produceState(initialValue = SystemClock.uptimeMillis()) {
+        while (true) {
+            value = SystemClock.uptimeMillis()
+            delay(16L)
+        }
+    }
+    return clock
+}
+
+private fun buildKeyboardLayout(range: IntRange): List<VirtualPianoKey> {
+    val result = mutableListOf<VirtualPianoKey>()
+    var whiteIndex = 0
+    range.forEach { pitch ->
+        val semitone = pitch % 12
+        val isSharp = semitone in listOf(1, 3, 6, 8, 10)
+        val label = when (semitone) {
+            0 -> "C"
+            1 -> "C#"
+            2 -> "D"
+            3 -> "D#"
+            4 -> "E"
+            5 -> "F"
+            6 -> "F#"
+            7 -> "G"
+            8 -> "G#"
+            9 -> "A"
+            10 -> "A#"
+            else -> "B"
+        }
+        result += VirtualPianoKey(
+            pitch = pitch,
+            label = label,
+            isSharp = isSharp,
+            whiteIndex = if (isSharp) null else whiteIndex
+        )
+        if (!isSharp) whiteIndex++
+    }
+    return result
+}
+
+private data class VirtualPianoKey(
+    val pitch: Int,
+    val label: String,
+    val isSharp: Boolean,
+    val whiteIndex: Int?,
+)
+
+private fun pitchToColor(pitch: Int): Color {
+    val hue = (pitch % 12) * (360f / 12f)
+    return Color.hsl(hue, 0.65f, 0.5f)
+}
+
+private const val PracticeKeyboardMin = 48
+private const val PracticeKeyboardMax = 84
 
 @Composable
 private fun LibrarySection(
@@ -1669,11 +2089,11 @@ private data class TabItem(
 private enum class MainTab {
     DEVICES,
     PLAYBACK,
+    PRACTICE,
     FAVORITES,
     PLAYLISTS,
     BUNDLED,
     USER_FOLDER,
-    SHEETS,
 }
 
 private fun Bundle.getBluetoothDevice(): BluetoothDevice? {

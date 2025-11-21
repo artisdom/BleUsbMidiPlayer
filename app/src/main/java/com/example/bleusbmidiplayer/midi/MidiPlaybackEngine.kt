@@ -96,16 +96,26 @@ class MidiPlaybackEngine(
 
     fun resume(receiver: MidiReceiver) {
         val pausedState = _state.value as? PlaybackEngineState.Paused ?: return
-        val cachedSequence = sequenceCache ?: return
+        startPlaybackFrom(pausedState.positionMs, receiver)
+    }
+
+    fun seekTo(positionMs: Long, receiver: MidiReceiver) {
+        startPlaybackFrom(positionMs, receiver)
+    }
+
+    private fun startPlaybackFrom(positionMs: Long, receiver: MidiReceiver) {
+        val sequence = sequenceCache ?: return
         val file = currentFile ?: return
-        val resumeFrom = pausedState.positionMs
+        val duration = sequence.durationMs
+        val target = positionMs.coerceIn(0L, duration)
+        playbackJob?.cancel()
         val job = scope.launch(Dispatchers.IO) {
             try {
-                var lastTimestamp = resumeFrom
-                var lastProgressEmit = resumeFrom
-                _state.value = PlaybackEngineState.Playing(file, resumeFrom, pausedState.durationMs)
-                cachedSequence.events
-                    .dropWhile { it.timestampMs < resumeFrom }
+                var lastTimestamp = target
+                var lastProgressEmit = target
+                _state.value = PlaybackEngineState.Playing(file, target, duration)
+                sequence.events
+                    .dropWhile { it.timestampMs < target }
                     .forEach { event ->
                         val delta = max(0L, event.timestampMs - lastTimestamp)
                         if (delta > 0) delay(delta)
@@ -115,8 +125,8 @@ class MidiPlaybackEngine(
                         if (event.timestampMs - lastProgressEmit >= PROGRESS_EMIT_MS) {
                             _state.value = PlaybackEngineState.Playing(
                                 file = file,
-                                positionMs = min(event.timestampMs, pausedState.durationMs),
-                                durationMs = pausedState.durationMs,
+                                positionMs = min(event.timestampMs, duration),
+                                durationMs = duration,
                             )
                             lastProgressEmit = event.timestampMs
                         }
