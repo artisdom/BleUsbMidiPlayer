@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
+import android.media.midi.MidiReceiver
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -32,6 +33,7 @@ import com.example.bleusbmidiplayer.midi.toTrackReference
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -53,6 +55,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val playbackEngine = MidiPlaybackEngine(viewModelScope)
     private var scanCallback: ScanCallback? = null
     private var scanTimeoutJob: Job? = null
+    private var inputReceiver: MidiReceiver? = null
+    private val inboundEvents = MutableSharedFlow<MidiInputEvent>(extraBufferCapacity = 64)
 
     private val _uiState = MutableStateFlow(
         MainUiState(
@@ -73,8 +77,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (session == null) {
                     playbackEngine.stop()
                     updateQueue { PlaybackQueueState() }
+                    attachInputReceiver(null)
                 }
                 _uiState.update { it.copy(activeSession = session) }
+                attachInputReceiver(session)
             }
         }
         viewModelScope.launch {
@@ -88,6 +94,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             collectionsStore.snapshot.collect { snapshot ->
                 applyCollectionsSnapshot(snapshot)
+            }
+        }
+        viewModelScope.launch {
+            inboundEvents.collect { event ->
+                _uiState.update { it.copy(lastInboundEvent = event) }
             }
         }
     }
@@ -148,6 +159,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 favorites = snapshot.favorites,
                 playlists = snapshot.playlists,
             )
+        }
+    }
+
+    private fun attachInputReceiver(session: MidiDeviceSession?) {
+        inputReceiver = null
+        val port = session?.receivePort ?: return
+        val receiver = object : MidiReceiver() {
+            override fun onSend(data: ByteArray, offset: Int, count: Int, timestamp: Long) {
+                val copy = data.copyOfRange(offset, offset + count)
+                inboundEvents.tryEmit(MidiInputEvent(copy, timestamp))
+            }
+        }
+        try {
+            port.connect(receiver)
+            inputReceiver = receiver
+        } catch (t: Throwable) {
+            Log.w("MainViewModel", "Unable to attach input receiver: ${t.message}")
         }
     }
 
@@ -410,7 +438,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(message = "Connect a MIDI device first") }
             return
         }
-        playbackEngine.resume(session.outputPort)
+        playbackEngine.resume(session.sendPort)
     }
 
     fun playNextInQueue() {
@@ -620,7 +648,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(message = "Unable to load ${reference.title}") }
                 return@launch
             }
-            playbackEngine.play(sequence, session.outputPort, item)
+            playbackEngine.play(sequence, session.sendPort, item)
             updateQueue {
                 PlaybackQueueState(
                     mode = mode,
@@ -686,6 +714,7 @@ data class MainUiState(
     val favorites: List<TrackReference> = emptyList(),
     val playlists: List<MidiPlaylist> = emptyList(),
     val queue: PlaybackQueueState = PlaybackQueueState(),
+    val lastInboundEvent: MidiInputEvent? = null,
     val message: String? = null,
 )
 
@@ -711,6 +740,11 @@ data class PlaybackQueueState(
     val mode: QueueMode = QueueMode.Idle,
     val tracks: List<TrackReference> = emptyList(),
     val currentIndex: Int = -1,
+)
+
+data class MidiInputEvent(
+    val data: ByteArray,
+    val timestamp: Long,
 )
 
 sealed interface QueueMode {

@@ -5,6 +5,7 @@ import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
 import android.media.midi.MidiInputPort
+import android.media.midi.MidiOutputPort
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,19 +48,22 @@ class MidiDeviceController(
                 onResult(Result.failure(IllegalStateException("Unable to open device")))
                 return@openDevice
             }
-            val ports = device.info.inputPortCount
-            if (ports <= 0) {
+            val sendPorts = device.info.inputPortCount
+            val receivePorts = device.info.outputPortCount
+            if (sendPorts <= 0) {
                 device.close()
                 onResult(Result.failure(IllegalStateException("Selected device has no input ports")))
                 return@openDevice
             }
             val inputPort = device.openInputPort(0)
+            val outputPort = if (receivePorts > 0) device.openOutputPort(0) else null
             if (inputPort == null) {
                 device.close()
                 onResult(Result.failure(IllegalStateException("Cannot open input port")))
                 return@openDevice
             }
             val session = MidiDeviceSession(deviceInfo, device, inputPort)
+            session.attachOutputPort(outputPort)
             closeActiveSession()
             _session.value = session
             onResult(Result.success(session))
@@ -76,13 +80,15 @@ class MidiDeviceController(
                 onResult(Result.failure(IllegalStateException("Unable to open BLE device")))
                 return@openBluetoothDevice
             }
-            val ports = midiDevice.info.inputPortCount
-            if (ports <= 0) {
+            val sendPorts = midiDevice.info.inputPortCount
+            val receivePorts = midiDevice.info.outputPortCount
+            if (sendPorts <= 0) {
                 midiDevice.close()
                 onResult(Result.failure(IllegalStateException("BLE device has no input ports")))
                 return@openBluetoothDevice
             }
             val inputPort = midiDevice.openInputPort(0)
+            val outputPort = if (receivePorts > 0) midiDevice.openOutputPort(0) else null
             if (inputPort == null) {
                 midiDevice.close()
                 onResult(Result.failure(IllegalStateException("Cannot open BLE input port")))
@@ -91,9 +97,10 @@ class MidiDeviceController(
             val session = MidiDeviceSession(
                 info = midiDevice.info,
                 device = midiDevice,
-                outputPort = inputPort,
+                sendPort = inputPort,
                 label = label ?: device.name ?: midiDevice.info.properties.getString(MidiDeviceInfo.PROPERTY_PRODUCT)
             )
+            session.attachOutputPort(outputPort)
             closeActiveSession()
             _session.value = session
             onResult(Result.success(session))
@@ -112,7 +119,11 @@ class MidiDeviceController(
     private fun closeActiveSession() {
         _session.value?.let {
             try {
-                it.outputPort.close()
+                it.sendPort.close()
+            } catch (_: Throwable) {
+            }
+            try {
+                it.receivePort?.close()
             } catch (_: Throwable) {
             }
             try {
@@ -127,6 +138,13 @@ class MidiDeviceController(
 data class MidiDeviceSession(
     val info: MidiDeviceInfo,
     val device: MidiDevice,
-    val outputPort: MidiInputPort,
+    val sendPort: MidiInputPort,
     val label: String? = null,
-)
+) {
+    var receivePort: MidiOutputPort? = null
+        private set
+
+    fun attachOutputPort(port: MidiOutputPort?) {
+        receivePort = port
+    }
+}
