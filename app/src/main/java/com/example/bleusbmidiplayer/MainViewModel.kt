@@ -62,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val inboundEvents = MutableSharedFlow<MidiInputEvent>(extraBufferCapacity = 64)
     private var practiceState: PracticeSessionState = PracticeSessionState.Inactive
     private val chordState = ChordTracker()
+    private val sheetFolder = "midi/JustPiano2-20160326"
 
     private val _uiState = MutableStateFlow(
         MainUiState(
@@ -99,6 +100,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             collectionsStore.snapshot.collect { snapshot ->
                 applyCollectionsSnapshot(snapshot)
+            }
+        }
+        viewModelScope.launch {
+            val sheetTracks = repository.listMidiInAssetFolder(sheetFolder)
+            _uiState.update { state ->
+                state.copy(
+                    sheetLibrary = sheetTracks
+                )
             }
         }
         viewModelScope.launch {
@@ -406,6 +415,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         playQueue(playlist.tracks, QueueMode.Playlist(playlistId), index)
     }
 
+    fun selectSheet(item: MidiFileItem) {
+        viewModelScope.launch {
+            val sequence = repository.loadSequence(item)
+            _uiState.update { state ->
+                state.copy(
+                    selectedSheet = item,
+                    selectedSheetSequence = sequence
+                )
+            }
+        }
+    }
+
+    fun toggleSheetFullscreen() {
+        _uiState.update { it.copy(sheetFullscreen = !it.sheetFullscreen) }
+    }
+
     fun generateRandomPlaylist() {
         val root = _uiState.value.library.folderTree.selectedFolder ?: run {
             _uiState.update { it.copy(message = "Select a folder first") }
@@ -576,6 +601,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnectDevice() {
         deviceController.disconnect()
         updateQueue { PlaybackQueueState() }
+        practiceState = PracticeSessionState.Inactive
     }
 
     fun toggleFolder(uri: Uri) {
@@ -831,6 +857,10 @@ data class MainUiState(
     val practiceMode: PracticeMode = PracticeMode.Off,
     val practiceProgress: PracticeProgress = PracticeProgress.Idle,
     val chord: String? = null,
+    val sheetLibrary: List<MidiFileItem> = emptyList(),
+    val selectedSheet: MidiFileItem? = null,
+    val selectedSheetSequence: MidiSequence? = null,
+    val sheetFullscreen: Boolean = false,
     val message: String? = null,
 )
 

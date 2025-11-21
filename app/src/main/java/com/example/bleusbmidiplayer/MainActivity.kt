@@ -15,6 +15,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -48,6 +51,8 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,6 +67,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -87,10 +93,13 @@ import com.example.bleusbmidiplayer.midi.FolderTreeRow
 import com.example.bleusbmidiplayer.midi.MidiDeviceSession
 import com.example.bleusbmidiplayer.midi.MidiFileItem
 import com.example.bleusbmidiplayer.midi.MidiPlaylist
+import com.example.bleusbmidiplayer.midi.MidiSequence
 import com.example.bleusbmidiplayer.midi.PlaybackEngineState
 import com.example.bleusbmidiplayer.midi.TrackReference
 import com.example.bleusbmidiplayer.midi.TrackReferenceSource
 import com.example.bleusbmidiplayer.ui.theme.BleUsbMidiPlayerTheme
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothPermissionLauncher: ActivityResultLauncher<Array<String>>
@@ -149,7 +158,8 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
             TabItem(MainTab.FAVORITES, "Favorites", Icons.Default.Favorite),
             TabItem(MainTab.PLAYLISTS, "Playlists", Icons.Default.QueueMusic),
             TabItem(MainTab.BUNDLED, "Bundled", Icons.Default.LibraryMusic),
-            TabItem(MainTab.USER_FOLDER, "User folder", Icons.Default.Folder)
+            TabItem(MainTab.USER_FOLDER, "User folder", Icons.Default.Folder),
+            TabItem(MainTab.SHEETS, "Sheet music", Icons.Default.Visibility),
         )
     }
     var selectedTabIndex by remember { mutableStateOf(0) }
@@ -281,6 +291,21 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                                 favoriteIds = favoriteIds
                             )
                         }
+                        item {
+                            PracticeControls(
+                                practiceMode = uiState.practiceMode,
+                                practiceProgress = uiState.practiceProgress,
+                                onModeChange = viewModel::setPracticeMode
+                            )
+                        }
+                        item {
+                            if (uiState.chord != null) {
+                                Text("Chord: ${uiState.chord}", style = MaterialTheme.typography.bodyLarge)
+                            }
+                            uiState.lastInboundEvent?.let {
+                                Text("Last note data: ${it.data.joinToString(" ") { b -> b.toUByte().toString(16) }}")
+                            }
+                        }
                     }
                 }
 
@@ -372,6 +397,25 @@ private fun MidiPlayerApp(viewModel: MainViewModel = viewModel()) {
                                 onAddFolderToPlaylist = { folder ->
                                     playlistDialogTarget = PlaylistTarget.Folder(folder.uri, folder.name)
                                 }
+                            )
+                        }
+                    }
+                }
+                MainTab.SHEETS -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            SheetMusicSection(
+                                library = uiState.sheetLibrary,
+                                selected = uiState.selectedSheet,
+                                sequence = uiState.selectedSheetSequence,
+                                fullscreen = uiState.sheetFullscreen,
+                                onSelect = viewModel::selectSheet,
+                                onToggleFullscreen = viewModel::toggleSheetFullscreen
                             )
                         }
                     }
@@ -637,6 +681,8 @@ private fun PlaybackSection(
                         "${formatTime(playbackState.positionMs)} / ${formatTime(playbackState.durationMs)}",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    Spacer(Modifier.height(4.dp))
+                    Text("Practice: ${queueState.mode}", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(12.dp))
                     PlaybackControls(
                         isPlaying = true,
@@ -668,6 +714,8 @@ private fun PlaybackSection(
                         "${formatTime(playbackState.positionMs)} / ${formatTime(playbackState.durationMs)}",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    Spacer(Modifier.height(4.dp))
+                    Text("Practice: ${queueState.mode}", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(12.dp))
                     PlaybackControls(
                         isPlaying = false,
@@ -754,6 +802,166 @@ private fun FavoriteToggleButton(isFavorite: Boolean, onToggle: () -> Unit) {
             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
             contentDescription = "Toggle favorite"
         )
+    }
+}
+
+@Composable
+private fun PracticeControls(
+    practiceMode: PracticeMode,
+    practiceProgress: PracticeProgress,
+    onModeChange: (PracticeMode) -> Unit,
+) {
+    ElevatedCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Practice mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                PracticeChip("Off", practiceMode is PracticeMode.Off) { onModeChange(PracticeMode.Off) }
+                PracticeChip("Left hand", practiceMode is PracticeMode.MelodyPractice && practiceMode.hand == PracticeHand.Left) {
+                    onModeChange(PracticeMode.MelodyPractice(PracticeHand.Left))
+                }
+                PracticeChip("Right hand", practiceMode is PracticeMode.MelodyPractice && practiceMode.hand == PracticeHand.Right) {
+                    onModeChange(PracticeMode.MelodyPractice(PracticeHand.Right))
+                }
+                PracticeChip("Both hands", practiceMode is PracticeMode.MelodyPractice && practiceMode.hand == PracticeHand.Both) {
+                    onModeChange(PracticeMode.MelodyPractice(PracticeHand.Both))
+                }
+                PracticeChip("Free play", practiceMode is PracticeMode.FreePlay) { onModeChange(PracticeMode.FreePlay) }
+            }
+            Spacer(Modifier.height(8.dp))
+            when (practiceProgress) {
+                PracticeProgress.Idle -> Text("No active practice session")
+                is PracticeProgress.Active -> {
+                    Text("Progress: ${practiceProgress.completed}/${practiceProgress.total}")
+                    practiceProgress.nextPitch?.let { Text("Next note: MIDI $it") }
+                }
+                is PracticeProgress.Done -> Text("Done practicing ${practiceProgress.fileTitle}")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PracticeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        leadingIcon = if (selected) {
+            { Icon(Icons.Default.Check, contentDescription = null) }
+        } else null
+    )
+}
+
+@Composable
+private fun SheetMusicSection(
+    library: List<MidiFileItem>,
+    selected: MidiFileItem?,
+    sequence: MidiSequence?,
+    fullscreen: Boolean,
+    onSelect: (MidiFileItem) -> Unit,
+    onToggleFullscreen: () -> Unit,
+) {
+    ElevatedCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Sheet music", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            if (library.isEmpty()) {
+                Text("No sheet songs found in assets/midi/JustPiano2-20160326")
+            } else {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    library.forEach { item ->
+                        Button(onClick = { onSelect(item) }) {
+                            Text(item.title)
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (sequence != null && selected != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Preview: ${selected.title}", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(12.dp))
+                    TextButton(onClick = onToggleFullscreen) {
+                        Icon(Icons.Default.Visibility, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (fullscreen) "Exit full screen" else "Full screen")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                SheetCanvas(sequence = sequence, modifier = Modifier.height(220.dp).fillMaxWidth())
+                if (fullscreen) {
+                    AlertDialog(
+                        onDismissRequest = onToggleFullscreen,
+                        text = {
+                            Column {
+                                Text(selected.title, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(12.dp))
+                                SheetCanvas(sequence = sequence, modifier = Modifier.height(400.dp).fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = onToggleFullscreen) { Text("Close") }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetCanvas(sequence: MidiSequence, modifier: Modifier = Modifier) {
+    val notes: List<Pair<Long, Int>> = sequence.events.mapNotNull { evt ->
+        val status = evt.data.getOrNull(0)?.toInt() ?: return@mapNotNull null
+        val command = status and 0xF0
+        val note = evt.data.getOrNull(1)?.toInt()?.and(0xFF) ?: return@mapNotNull null
+        val velocity = evt.data.getOrNull(2)?.toInt()?.and(0xFF) ?: 0
+        val isNoteOn = command == 0x90 && velocity > 0
+        if (isNoteOn) Pair(evt.timestampMs, note) else null
+    }
+    if (notes.isEmpty()) {
+        Text("Unable to render notes for this track.")
+        return
+    }
+    val minTime = notes.minOf { pair -> pair.first }
+    val maxTime = notes.maxOf { pair -> pair.first }.coerceAtLeast(minTime + 1)
+    val minPitch = notes.minOf { pair -> pair.second }
+    val maxPitch = notes.maxOf { pair -> pair.second }
+    val staffColor = MaterialTheme.colorScheme.outline
+    val noteColor = MaterialTheme.colorScheme.primary
+    val surface = MaterialTheme.colorScheme.surfaceVariant
+    Canvas(modifier = modifier.background(surface)) {
+        val staffCount = 2
+        val staffSpacing = size.height / (staffCount * 2f)
+        repeat(staffCount * 2) { line ->
+            val y = staffSpacing * (line + 1)
+            drawLine(
+                color = staffColor,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 2f
+            )
+        }
+        notes.forEach { (time, pitch) ->
+            val xRatio = (time - minTime).toFloat() / (maxTime - minTime).toFloat()
+            val x = xRatio * size.width
+            val yRatio = (pitch - minPitch).toFloat() / (maxPitch - minPitch + 1).toFloat()
+            val y = size.height - yRatio * size.height
+            drawRect(
+                color = noteColor,
+                topLeft = Offset(x, y - 6f),
+                size = Size(10f, 12f)
+            )
+        }
     }
 }
 
@@ -1465,6 +1673,7 @@ private enum class MainTab {
     PLAYLISTS,
     BUNDLED,
     USER_FOLDER,
+    SHEETS,
 }
 
 private fun Bundle.getBluetoothDevice(): BluetoothDevice? {

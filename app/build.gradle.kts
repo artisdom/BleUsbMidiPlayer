@@ -66,4 +66,5 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.coil.compose)
 }

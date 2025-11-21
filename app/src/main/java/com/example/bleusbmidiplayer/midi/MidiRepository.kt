@@ -31,6 +31,21 @@ class MidiRepository(
                 )
             }
     }
+    fun listMidiInAssetFolder(folder: String): List<MidiFileItem> {
+        val assetManager = context.assets
+        val entries = assetManager.list(folder).orEmpty()
+        return entries
+            .filter { it.endsWith(".mid", true) || it.endsWith(".midi", true) }
+            .sorted()
+            .map { name ->
+                val path = "$folder/$name"
+                MidiFileItem(
+                    id = "asset-$path",
+                    title = name.substringBeforeLast('.'),
+                    source = MidiFileSource.Asset(assetPath = path),
+                )
+            }
+    }
 
     suspend fun listFolderChildren(folderUri: Uri, treeUri: Uri, forceRefresh: Boolean = false): FolderListing =
         withContext(Dispatchers.IO) {
