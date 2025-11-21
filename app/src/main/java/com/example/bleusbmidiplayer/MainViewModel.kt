@@ -27,6 +27,8 @@ import com.example.bleusbmidiplayer.midi.MidiPlaylist
 import com.example.bleusbmidiplayer.midi.MidiPlaybackEngine
 import com.example.bleusbmidiplayer.midi.MidiRepository
 import com.example.bleusbmidiplayer.midi.PlaybackEngineState
+import com.example.bleusbmidiplayer.midi.MidiSequence
+import com.example.bleusbmidiplayer.midi.MidiEvent
 import com.example.bleusbmidiplayer.midi.TrackReference
 import com.example.bleusbmidiplayer.midi.toMidiFileItem
 import com.example.bleusbmidiplayer.midi.toTrackReference
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.ArrayDeque
 import java.util.UUID
+import kotlin.math.abs
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val midiManager: MidiManager = application.getSystemService(MidiManager::class.java)
@@ -57,6 +60,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var scanTimeoutJob: Job? = null
     private var inputReceiver: MidiReceiver? = null
     private val inboundEvents = MutableSharedFlow<MidiInputEvent>(extraBufferCapacity = 64)
+    private var practiceState: PracticeSessionState = PracticeSessionState.Inactive
+    private val chordState = ChordTracker()
 
     private val _uiState = MutableStateFlow(
         MainUiState(
@@ -98,7 +103,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             inboundEvents.collect { event ->
-                _uiState.update { it.copy(lastInboundEvent = event) }
+                handleInboundEvent(event)
             }
         }
     }
@@ -383,6 +388,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val tracks = if (shuffle) playlist.tracks.shuffled() else playlist.tracks
         playQueue(tracks, QueueMode.Playlist(playlistId), startIndex = 0)
     }
+    /** Practice mode selection controlling inbound-note handling */
+    fun setPracticeMode(mode: PracticeMode) {
+        practiceState = PracticeSessionState.Inactive
+        _uiState.update { it.copy(practiceMode = mode, practiceProgress = PracticeProgress.Idle) }
+    }
 
     fun playFavoriteAt(index: Int) {
         val favorites = _uiState.value.favorites
@@ -648,13 +658,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(message = "Unable to load ${reference.title}") }
                 return@launch
             }
-            playbackEngine.play(sequence, session.sendPort, item)
-            updateQueue {
-                PlaybackQueueState(
-                    mode = mode,
-                    tracks = tracks,
-                    currentIndex = targetIndex,
-                )
+            val practiceMode = _uiState.value.practiceMode
+            if (practiceMode is PracticeMode.MelodyPractice) {
+                startPracticeSession(sequence, session, item, practiceMode)
+                updateQueue {
+                    PlaybackQueueState(
+                        mode = mode,
+                        tracks = tracks,
+                        currentIndex = targetIndex,
+                    )
+                }
+            } else {
+                playbackEngine.play(sequence, session.sendPort, item)
+                updateQueue {
+                    PlaybackQueueState(
+                        mode = mode,
+                        tracks = tracks,
+                        currentIndex = targetIndex,
+                    )
+                }
             }
         }
     }
@@ -700,6 +722,97 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun startPracticeSession(
+        sequence: MidiSequence,
+        session: MidiDeviceSession,
+        file: MidiFileItem,
+        mode: PracticeMode.MelodyPractice
+    ) {
+        val (targetNotes, autoNotes) = splitHands(sequence, mode.hand)
+        practiceState = if (targetNotes.isEmpty()) {
+            PracticeSessionState.Inactive
+        } else {
+            PracticeSessionState.Active(
+                targetNotes = targetNotes,
+                currentIndex = 0,
+                total = targetNotes.size,
+                file = file,
+            )
+        }
+        _uiState.update { it.copy(practiceProgress = practiceState.toProgress()) }
+
+        if (autoNotes.isNotEmpty()) {
+            val autoSequence = MidiSequence(events = autoNotes.map { it.event }, durationMs = sequence.durationMs)
+            playbackEngine.play(autoSequence, session.sendPort, file)
+        } else {
+            playbackEngine.stop()
+        }
+    }
+
+    private fun splitHands(sequence: MidiSequence, hand: PracticeHand): Pair<List<NoteEvent>, List<NoteEvent>> {
+        val target = mutableListOf<NoteEvent>()
+        val auto = mutableListOf<NoteEvent>()
+        sequence.events.forEach { evt ->
+            val note = evt.toNoteEvent() ?: return@forEach
+            val isLeft = note.pitch < 60
+            val assignToTarget = when (hand) {
+                PracticeHand.Left -> isLeft
+                PracticeHand.Right -> !isLeft
+                PracticeHand.Both -> true
+            }
+            if (assignToTarget) {
+                target += note
+            } else {
+                auto += note
+            }
+        }
+        return target to auto
+    }
+
+    private fun handleInboundEvent(event: MidiInputEvent) {
+        // update chord detection
+        val status = event.data.getOrNull(0)?.toInt() ?: return
+        val command = status and 0xF0
+        val noteNumber = event.data.getOrNull(1)?.toInt()?.and(0xFF) ?: -1
+        val velocity = event.data.getOrNull(2)?.toInt()?.and(0xFF) ?: 0
+        val isNoteOn = command == 0x90 && velocity > 0
+        val isNoteOff = command == 0x80 || (command == 0x90 && velocity == 0)
+
+        if (isNoteOn) {
+            chordState.add(noteNumber, event.timestamp)
+        } else if (isNoteOff) {
+            chordState.remove(noteNumber)
+        }
+        _uiState.update { state ->
+            state.copy(
+                lastInboundEvent = event,
+                chord = chordState.describe()
+            )
+        }
+        if (isNoteOn) {
+            advancePractice(noteNumber, event.data)
+        }
+    }
+
+    private fun advancePractice(noteNumber: Int, rawData: ByteArray) {
+        val sessionState = practiceState
+        if (sessionState !is PracticeSessionState.Active) return
+        val expected = sessionState.targetNotes.getOrNull(sessionState.currentIndex) ?: return
+        if (expected.pitch != noteNumber) return
+        val session = _uiState.value.activeSession ?: return
+        try {
+            session.sendPort.send(rawData, 0, rawData.size)
+        } catch (_: Throwable) {
+        }
+        val nextIndex = sessionState.currentIndex + 1
+        practiceState = if (nextIndex >= sessionState.total) {
+            PracticeSessionState.Completed(sessionState.file)
+        } else {
+            sessionState.copy(currentIndex = nextIndex)
+        }
+        _uiState.update { it.copy(practiceProgress = practiceState.toProgress()) }
+    }
+
     private fun List<TrackReference>.addUnique(track: TrackReference): List<TrackReference> {
         return if (any { it.id == track.id }) this else this + track
     }
@@ -715,6 +828,9 @@ data class MainUiState(
     val playlists: List<MidiPlaylist> = emptyList(),
     val queue: PlaybackQueueState = PlaybackQueueState(),
     val lastInboundEvent: MidiInputEvent? = null,
+    val practiceMode: PracticeMode = PracticeMode.Off,
+    val practiceProgress: PracticeProgress = PracticeProgress.Idle,
+    val chord: String? = null,
     val message: String? = null,
 )
 
@@ -746,6 +862,90 @@ data class MidiInputEvent(
     val data: ByteArray,
     val timestamp: Long,
 )
+
+sealed interface PracticeMode {
+    data object Off : PracticeMode
+    data class MelodyPractice(val hand: PracticeHand) : PracticeMode
+    data object FreePlay : PracticeMode
+}
+
+enum class PracticeHand { Left, Right, Both }
+
+sealed interface PracticeProgress {
+    data object Idle : PracticeProgress
+    data class Active(val completed: Int, val total: Int, val nextPitch: Int?) : PracticeProgress
+    data class Done(val fileTitle: String) : PracticeProgress
+}
+
+private sealed interface PracticeSessionState {
+    data object Inactive : PracticeSessionState
+    data class Active(
+        val targetNotes: List<NoteEvent>,
+        val currentIndex: Int,
+        val total: Int,
+        val file: MidiFileItem,
+    ) : PracticeSessionState
+
+    data class Completed(val file: MidiFileItem) : PracticeSessionState
+}
+
+private data class NoteEvent(
+    val pitch: Int,
+    val velocity: Int,
+    val event: MidiEvent,
+)
+
+private class ChordTracker {
+    private val pressed = mutableSetOf<Int>()
+
+    fun add(note: Int, timestamp: Long) {
+        pressed += note
+    }
+
+    fun remove(note: Int) {
+        pressed -= note
+    }
+
+    fun describe(): String? {
+        if (pressed.size < 3) return null
+        val notes = pressed.sorted()
+        val root = notes.first()
+        val intervals = notes.map { (it - root) % 12 }.sorted()
+        val name = when {
+            intervals.containsAll(listOf(0, 4, 7)) -> "${pitchName(root)} major"
+            intervals.containsAll(listOf(0, 3, 7)) -> "${pitchName(root)} minor"
+            intervals.containsAll(listOf(0, 3, 6)) -> "${pitchName(root)} dim"
+            intervals.containsAll(listOf(0, 4, 8)) -> "${pitchName(root)} aug"
+            else -> "${pitchName(root)} chord"
+        }
+        return name
+    }
+
+    private fun pitchName(pitch: Int): String {
+        val names = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+        return names[pitch.mod(12)]
+    }
+}
+
+private fun MidiEvent.toNoteEvent(): NoteEvent? {
+    val status = data.getOrNull(0)?.toInt() ?: return null
+    val command = status and 0xF0
+    val note = data.getOrNull(1)?.toInt()?.and(0xFF) ?: return null
+    val velocity = data.getOrNull(2)?.toInt()?.and(0xFF) ?: 0
+    val isNoteOn = command == 0x90 && velocity > 0
+    if (!isNoteOn) return null
+    return NoteEvent(pitch = note, velocity = velocity, event = this)
+}
+
+private fun PracticeSessionState.toProgress(): PracticeProgress = when (this) {
+    PracticeSessionState.Inactive -> PracticeProgress.Idle
+    is PracticeSessionState.Completed -> PracticeProgress.Done(file.title)
+    is PracticeSessionState.Active -> PracticeProgress.Active(
+        completed = currentIndex,
+        total = total,
+        nextPitch = targetNotes.getOrNull(currentIndex)?.pitch
+    )
+}
 
 sealed interface QueueMode {
     data object Idle : QueueMode
